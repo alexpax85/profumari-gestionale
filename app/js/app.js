@@ -218,6 +218,20 @@ function inOrdine() {
   for (const o of stato.ordini) for (const r of righePendenti(o)) { (m[r.codice] ??= {})[o.negozio] = (m[r.codice]?.[o.negozio] || 0) + r.ml; }
   return m;
 }
+/**
+ * Trasferimenti aperti, per codice e negozio: `arrivo` = ml che entreranno (proposti o spediti),
+ * `uscita` = ml che usciranno ma non sono ancora stati scalati (solo i proposti: gli spediti sono già fuori giacenza).
+ */
+function movimentiAttesi() {
+  const m = {};
+  const voce = (c, n) => ((m[c] ??= {})[n] ??= { arrivo: 0, uscita: 0 });
+  for (const t of stato.trasferimenti) {
+    if (t.stato !== 'proposto' && t.stato !== 'spedito') continue;
+    voce(t.codice, t.a).arrivo += Number(t.ml);
+    if (t.stato === 'proposto') voce(t.codice, t.da).uscita += Number(t.ml);
+  }
+  return m;
+}
 function mlInOrdine(codice, negozio) { let t = 0; for (const o of stato.ordini) if (o.negozio === negozio) for (const r of righePendenti(o)) if (r.codice === codice) t += r.ml; return t; }
 function statoOrdine(o) {
   const pend = righePendenti(o).length, ric = o.righe.filter(r => r.ricevutoMl != null).length;
@@ -297,7 +311,7 @@ function mlSpostamentoDefault(f, ricevente, g, p) {
   // se chi cede ha eccedenza, si usa quella; altrimenti si propone di dividere a metà quello che ha
   return Math.max(10, cedibile >= 10 ? Math.min(serve, cedibile) : Math.min(serve, arr10(gM / 2, false)));
 }
-const ETICH_STATO = { sotto: 'Sotto scorta', esaurito: 'Esaurite', ok: 'A posto' };
+const ETICH_STATO = { sotto: 'Sotto scorta', esaurito: 'Esaurite', ok: 'A posto', transito: 'Con trasferimenti in corso', ordine: 'Con ordini in attesa' };
 
 function renderMagazzino() {
   const el = $('#tab-magazzino');
@@ -310,6 +324,7 @@ function renderMagazzino() {
   const g = giacenze();
   const vel = velocita();
   const ord = inOrdine();
+  const att = movimentiAttesi();
   const ss = sottoScorta();
   const tot = {}; for (const n of NEGOZI) tot[n] = fr.reduce((a, f) => a + (g[f.codice]?.[n] || 0), 0);
   const transito = fr.reduce((a, f) => a + (g[f.codice]?.transito || 0), 0);
@@ -323,16 +338,25 @@ function renderMagazzino() {
     if (filtro.stato === 'sotto' && !negoziFiltro.some(n => statoDi(f, n) !== 'ok')) return false;
     if (filtro.stato === 'esaurito' && !negoziFiltro.some(n => statoDi(f, n) === 'esaurito')) return false;
     if (filtro.stato === 'ok' && !negoziFiltro.every(n => statoDi(f, n) === 'ok')) return false;
+    if (filtro.stato === 'transito' && !negoziFiltro.some(n => (att[f.codice]?.[n]?.arrivo || 0) + (att[f.codice]?.[n]?.uscita || 0))) return false;
+    if (filtro.stato === 'ordine' && !negoziFiltro.some(n => ord[f.codice]?.[n])) return false;
     return true;
   };
-  const chiaveOrd = f => ({ codice: f.codice, nome: `${f.brand} ${f.nome}`.toLowerCase(), categoria: f.categoria, Latina: g[f.codice]?.Latina || 0, Aprilia: g[f.codice]?.Aprilia || 0, transito: g[f.codice]?.transito || 0, ordine: NEGOZI.reduce((a, n) => a + (ord[f.codice]?.[n] || 0), 0), minima: sogliaDi(f) })[filtro.sort];
+  const chiaveOrd = f => ({ codice: f.codice, nome: `${f.brand} ${f.nome}`.toLowerCase(), categoria: f.categoria, Latina: g[f.codice]?.Latina || 0, Aprilia: g[f.codice]?.Aprilia || 0, minima: sogliaDi(f) })[filtro.sort] ?? f.codice;
   const visibili = fr.filter(passaFiltro).sort((a, b) => { const x = chiaveOrd(a), y = chiaveOrd(b); return ((x < y ? -1 : x > y ? 1 : 0) * filtro.dir) || a.codice.localeCompare(b.codice); });
   const th = (key, label, cls = '') => `<th class="${cls} ord${filtro.sort === key ? ' attivo' : ''}" data-sort="${key}">${label}<span class="freccia">${filtro.sort === key ? (filtro.dir > 0 ? '▲' : '▼') : '↕'}</span></th>`;
-  const cellaMl = (f, n) => { const ml = g[f.codice]?.[n] || 0; const st = statoDi(f, n); const io = ord[f.codice]?.[n] || 0; return `<td class="num${filtro.negozio === n ? ' evid' : ''}"><span class="badge ${st}">${fmtMl(ml)}</span>${io ? `<div class="cop"><span class="badge ordine">+${fmtMl(io)} in ordine</span></div>` : ''}${vel.attiva ? `<div class="cop">${fmtCop(copertura(ml, vel.per[f.codice]?.[n] || 0))}</div>` : ''}</td>`; };
+  const cellaMl = (f, n) => {
+    const ml = g[f.codice]?.[n] || 0, st = statoDi(f, n);
+    const io = ord[f.codice]?.[n] || 0, a = att[f.codice]?.[n] || {};
+    const mov = [
+      io ? `<span class="badge ordine" title="Ordinato al fornitore, non ancora consegnato">+${fmtMl(io)} ordine</span>` : '',
+      a.arrivo ? `<span class="badge arrivo" title="In arrivo dall'altro negozio">+${fmtMl(a.arrivo)} arrivo</span>` : '',
+      a.uscita ? `<span class="badge uscita" title="Da spedire all'altro negozio, ancora in giacenza">−${fmtMl(a.uscita)} uscita</span>` : '',
+    ].filter(Boolean).join(' ');
+    return `<td class="num${filtro.negozio === n ? ' evid' : ''}"><span class="badge ${st}">${fmtMl(ml)}</span>${mov ? `<div class="mov">${mov}</div>` : ''}${vel.attiva ? `<div class="cop">${fmtCop(copertura(ml, vel.per[f.codice]?.[n] || 0))}</div>` : ''}</td>`;
+  };
   const righe = visibili.map(f => {
-    const tr = g[f.codice]?.transito ? `<span class="badge neutro">${fmtMl(g[f.codice].transito)}</span>` : '';
-    const io = NEGOZI.map(n => [n, ord[f.codice]?.[n] || 0]).filter(([, v]) => v);
-    return `<tr><td class="cod">${f.codice}</td><td>${esc(f.brand ? f.brand + ' - ' : '')}${esc(f.nome)}${f.attivo === false ? ' <span class="badge grigio">disattivata</span>' : ''}</td><td class="muted piccolo-testo">${esc(f.categoria)}</td>${NEGOZI.map(n => cellaMl(f, n)).join('')}<td class="num">${tr}</td><td class="num">${io.map(([n, v]) => `<span class="badge ordine">${fmtMl(v)} → ${n}</span>`).join('<br>')}</td><td class="num muted">${sogliaDi(f)} / ${obiettivoDi(f)}</td><td><button class="piccolo azione-piano" data-piu="${f.codice}" title="Ordina o sposta questa referenza">Ordina o sposta</button></td></tr>`;
+    return `<tr><td class="cod">${f.codice}</td><td>${esc(f.brand ? f.brand + ' - ' : '')}${esc(f.nome)}${f.attivo === false ? ' <span class="badge grigio">disattivata</span>' : ''}</td><td class="muted piccolo-testo">${esc(f.categoria)}</td>${NEGOZI.map(n => cellaMl(f, n)).join('')}<td class="num muted">${sogliaDi(f)} / ${obiettivoDi(f)}</td><td><button class="piccolo azione-piano" data-piu="${f.codice}" title="Ordina o sposta questa referenza">Ordina o sposta</button></td></tr>`;
   }).join('');
 
   const chips = [];
@@ -383,8 +407,8 @@ function renderMagazzino() {
         <select id="f-stato" class="sel"><option value="">Qualsiasi stato</option>${Object.entries(ETICH_STATO).map(([k, v]) => `<option value="${k}" ${filtro.stato === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
       </div>
       ${chips.length ? `<div class="chips">Filtri: ${chips.map(([k, v]) => `<button class="chip" data-chip="${k}">${esc(v)} ✕</button>`).join('')}<button class="chip azzera" data-chip="tutti">Azzera</button><span class="muted piccolo-testo">${visibili.length} referenze</span></div>` : ''}
-      <p class="muted piccolo-testo" style="margin:0 0 8px">Tocca l'intestazione di una colonna per ordinare. Con <b>Ordina o sposta</b> aggiungi al piano qualsiasi referenza, anche se non è sotto scorta. ${vel.attiva ? `Sotto ogni giacenza: copertura stimata in settimane di vendita.` : `La copertura in settimane di vendita comparirà sotto ogni giacenza dopo ${SETTIMANE_MIN} settimane di vendite caricate.`}</p>
-      <div class="tabella-wrap"><table><thead><tr>${th('codice', 'Codice')}${th('nome', 'Referenza')}${th('categoria', 'Categoria')}${NEGOZI.map(n => th(n, n, 'num')).join('')}${th('transito', 'In transito', 'num')}${th('ordine', 'In ordine', 'num')}${th('minima', 'Min / Obiettivo', 'num')}<th></th></tr></thead><tbody>${righe || '<tr><td colspan="9" class="vuoto">Nessuna referenza corrisponde ai filtri.</td></tr>'}</tbody></table></div>
+      <p class="muted piccolo-testo" style="margin:0 0 8px">Tocca l'intestazione di una colonna per ordinare. Con <b>Ordina o sposta</b> aggiungi al piano qualsiasi referenza, anche se non è sotto scorta. Sotto ogni giacenza: quanto è <span class="badge ordine">in ordine</span> dal fornitore, <span class="badge arrivo">in arrivo</span> dall'altro negozio, <span class="badge uscita">in uscita</span> perché da spedire${vel.attiva ? `, e la copertura stimata in settimane di vendita` : ` (la copertura in settimane comparirà dopo ${SETTIMANE_MIN} settimane di vendite caricate)`}.</p>
+      <div class="tabella-wrap"><table><thead><tr>${th('codice', 'Codice')}${th('nome', 'Referenza')}${th('categoria', 'Categoria')}${NEGOZI.map(n => th(n, n, 'num')).join('')}${th('minima', 'Min / Obiettivo', 'num')}<th></th></tr></thead><tbody>${righe || '<tr><td colspan="7" class="vuoto">Nessuna referenza corrisponde ai filtri.</td></tr>'}</tbody></table></div>
     </div>`;
   $('#cerca').oninput = e => { filtro.testo = e.target.value; renderMagazzinoSoloTabella(); };
   const pannello = $('#pannello-proposte'); if (pannello) pannello.ontoggle = () => { pannelloAperto = pannello.open; };

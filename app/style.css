@@ -182,3 +182,7 @@ body.modo-stampa #stampa { display: block; padding: 24px; font-family: var(--fon
 #stampa tfoot td { border-top: 2px solid #000; font-weight: 700; }
 @media print { body.modo-stampa { padding: 0; } #stampa .logo-stampa { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
 .badge.ordine { background: var(--info-bg); color: var(--teal-scuro); border: 1px dashed var(--teal); font-weight: 600; }
+.badge.arrivo { background: var(--nero); color: #fff; font-weight: 600; }
+.badge.uscita { background: #fff; color: var(--muted); border: 1px solid var(--line); font-weight: 600; }
+.mov { display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; margin-top: 4px; }
+.mov .badge { font-size: .72rem; padding: 1px 7px; }
