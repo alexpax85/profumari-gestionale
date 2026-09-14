@@ -67,8 +67,19 @@ l'app non ha dipendenze esterne e funziona anche offline.
 
 Le stesse istruzioni sono nell'app, in fondo alla scheda Referenze e soglie.
 
-## Prossimi passi (fase 2)
+## Prossimi passi (fase 2: produzione)
 
-- Sincronizzazione tra i tablet: backend Firebase (Firestore + Auth + Hosting, piano gratuito) dietro la stessa interfaccia di `store.js`.
-- Accessi: titolare e commessi.
-- Fornitore e costo già previsti in anagrafica; riepilogo riordino per fornitore.
+Da decidere insieme:
+
+- **Sincronizzazione tra i due tablet**: oggi i dati vivono nel browser di ciascun dispositivo. L'ipotesi è Firebase (Firestore + Auth + Hosting, piano gratuito) dietro la stessa interfaccia di `store.js`, che è già isolata apposta. Da valutare anche la gestione dei conflitti (due negozi che scrivono insieme) e il comportamento offline.
+- **Accessi**: titolare e commessi, con permessi diversi (es. solo il titolare conferma ordini e rettifiche).
+- **Dove pubblicare la versione definitiva**: `main` resta la demo su GitHub Pages; la produzione si sviluppa su un ramo dedicato e si unisce quando pronta. Da decidere se avrà un indirizzo separato.
+
+Da confermare col cliente:
+
+- **Inventario di Aprilia** con le stesse colonne del file Latina (Nome, Quantità, Genere, PL, PF, VF) per il caricamento iniziale vero.
+- **Nomi estesi dei fornitori** PL, PF, VF: oggi negli ordini compare la sigla.
+- **Unità degli ordini**: sono in ml. Se i fornitori vendono a flacone (250 ml, 500 ml, 1 L) va aggiunto il formato per fornitore e la conversione.
+- **Costo di acquisto** per referenza (€/100 ml), oggi vuoto: serve per la stima in euro degli ordini.
+- **Referenze non più trattate**: i 7 codici presenti nel vecchio export e non nel nuovo file vanno disattivati dall'anagrafica.
+- **Soglie minima e obiettivo** definitive per categoria, oggi impostate a valori di prova.
