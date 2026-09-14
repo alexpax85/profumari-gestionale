@@ -181,3 +181,4 @@ body.modo-stampa #stampa { display: block; padding: 24px; font-family: var(--fon
 #stampa .manca { color: #b3261e; font-weight: 700; }
 #stampa tfoot td { border-top: 2px solid #000; font-weight: 700; }
 @media print { body.modo-stampa { padding: 0; } #stampa .logo-stampa { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+.badge.ordine { background: var(--info-bg); color: var(--teal-scuro); border: 1px dashed var(--teal); font-weight: 600; }

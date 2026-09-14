@@ -80,23 +80,25 @@ function proposta(f, ricevente, g, vel) {
   const minima = sogliaDi(f), obiettivo = obiettivoDi(f);
   const inArrivo = stato.trasferimenti.filter(t => t.codice === f.codice && t.a === ricevente && (t.stato === 'proposto' || t.stato === 'spedito')).reduce((a, t) => a + t.ml, 0);
   if (inArrivo) return { tipo: 'in_arrivo', ml: inArrivo };
+  const ordinato = mlInOrdine(f.codice, ricevente);
+  const gRatteso = gR + ordinato;   // la merce ordinata non è ancora in giacenza, ma è già coperta
   const cedibile = gM - minima;
-  let ml = obiettivo - gR, modo = 'obiettivo';
+  let ml = obiettivo - gRatteso, modo = 'obiettivo';
   if (vel.attiva) {
     const vR = vel.per[f.codice]?.[ricevente] || 0, vM = vel.per[f.codice]?.[mittente] || 0;
     if (vR > 0) {
-      const equilibrio = (vR * gM - vM * gR) / (vR + vM);
+      const equilibrio = (vR * gM - vM * gRatteso) / (vR + vM);
       // tetto: non portare chi riceve oltre ORIZZONTE_SETT settimane di copertura (né sotto quanto serve per l'obiettivo)
-      ml = Math.min(equilibrio, Math.max(vR * ORIZZONTE_SETT - gR, obiettivo - gR));
+      ml = Math.min(equilibrio, Math.max(vR * ORIZZONTE_SETT - gRatteso, obiettivo - gRatteso));
       modo = 'copertura';
     }
   }
   ml = Math.floor(Math.min(ml, cedibile) / 10) * 10;
   if (ml < 50) {
-    let motivo = cedibile < 50 ? `${mittente} ha solo ${fmtMl(Math.max(0, cedibile))} oltre la scorta minima` : modo === 'copertura' ? `${ricevente} ha già scorta sufficiente rispetto a ${mittente}` : 'spostamento troppo piccolo';
-    return { tipo: 'no', motivo };
+    let motivo = ordinato ? `${ricevente} ha già ${fmtMl(ordinato)} in ordine` : cedibile < 50 ? `${mittente} ha solo ${fmtMl(Math.max(0, cedibile))} oltre la scorta minima` : modo === 'copertura' ? `${ricevente} ha già scorta sufficiente rispetto a ${mittente}` : 'spostamento troppo piccolo';
+    return { tipo: 'no', motivo, ordinato };
   }
-  return { tipo: 'sposta', ml, da: mittente, a: ricevente, resta: gM - ml, modo };
+  return { tipo: 'sposta', ml, da: mittente, a: ricevente, resta: gM - ml, modo, ordinato };
 }
 function lottiAnnullati() { return new Set(stato.lotti.filter(l => l.annullato).map(l => l.id)); }
 function movimentiValidi() { const ann = lottiAnnullati(); return stato.movimenti.filter(m => !m.lotto || !ann.has(m.lotto)); }
@@ -210,6 +212,13 @@ function dialogOrdine(o) {
 
 // ---------- ricezione ordini ----------
 function righePendenti(o) { return o.righe.filter(r => r.ricevutoMl == null && !r.annullata); }
+/** ml confermati ai fornitori e non ancora ricevuti, per codice e negozio di consegna. */
+function inOrdine() {
+  const m = {};
+  for (const o of stato.ordini) for (const r of righePendenti(o)) { (m[r.codice] ??= {})[o.negozio] = (m[r.codice]?.[o.negozio] || 0) + r.ml; }
+  return m;
+}
+function mlInOrdine(codice, negozio) { let t = 0; for (const o of stato.ordini) if (o.negozio === negozio) for (const r of righePendenti(o)) if (r.codice === codice) t += r.ml; return t; }
 function statoOrdine(o) {
   const pend = righePendenti(o).length, ric = o.righe.filter(r => r.ricevutoMl != null).length;
   if (!pend) return ric ? 'ricevuto' : 'annullato';
@@ -300,6 +309,7 @@ function renderMagazzino() {
   }
   const g = giacenze();
   const vel = velocita();
+  const ord = inOrdine();
   const ss = sottoScorta();
   const tot = {}; for (const n of NEGOZI) tot[n] = fr.reduce((a, f) => a + (g[f.codice]?.[n] || 0), 0);
   const transito = fr.reduce((a, f) => a + (g[f.codice]?.transito || 0), 0);
@@ -315,13 +325,14 @@ function renderMagazzino() {
     if (filtro.stato === 'ok' && !negoziFiltro.every(n => statoDi(f, n) === 'ok')) return false;
     return true;
   };
-  const chiaveOrd = f => ({ codice: f.codice, nome: `${f.brand} ${f.nome}`.toLowerCase(), categoria: f.categoria, Latina: g[f.codice]?.Latina || 0, Aprilia: g[f.codice]?.Aprilia || 0, transito: g[f.codice]?.transito || 0, minima: sogliaDi(f) })[filtro.sort];
+  const chiaveOrd = f => ({ codice: f.codice, nome: `${f.brand} ${f.nome}`.toLowerCase(), categoria: f.categoria, Latina: g[f.codice]?.Latina || 0, Aprilia: g[f.codice]?.Aprilia || 0, transito: g[f.codice]?.transito || 0, ordine: NEGOZI.reduce((a, n) => a + (ord[f.codice]?.[n] || 0), 0), minima: sogliaDi(f) })[filtro.sort];
   const visibili = fr.filter(passaFiltro).sort((a, b) => { const x = chiaveOrd(a), y = chiaveOrd(b); return ((x < y ? -1 : x > y ? 1 : 0) * filtro.dir) || a.codice.localeCompare(b.codice); });
   const th = (key, label, cls = '') => `<th class="${cls} ord${filtro.sort === key ? ' attivo' : ''}" data-sort="${key}">${label}<span class="freccia">${filtro.sort === key ? (filtro.dir > 0 ? '▲' : '▼') : '↕'}</span></th>`;
-  const cellaMl = (f, n) => { const ml = g[f.codice]?.[n] || 0; const st = statoDi(f, n); return `<td class="num${filtro.negozio === n ? ' evid' : ''}"><span class="badge ${st}">${fmtMl(ml)}</span>${vel.attiva ? `<div class="cop">${fmtCop(copertura(ml, vel.per[f.codice]?.[n] || 0))}</div>` : ''}</td>`; };
+  const cellaMl = (f, n) => { const ml = g[f.codice]?.[n] || 0; const st = statoDi(f, n); const io = ord[f.codice]?.[n] || 0; return `<td class="num${filtro.negozio === n ? ' evid' : ''}"><span class="badge ${st}">${fmtMl(ml)}</span>${io ? `<div class="cop"><span class="badge ordine">+${fmtMl(io)} in ordine</span></div>` : ''}${vel.attiva ? `<div class="cop">${fmtCop(copertura(ml, vel.per[f.codice]?.[n] || 0))}</div>` : ''}</td>`; };
   const righe = visibili.map(f => {
     const tr = g[f.codice]?.transito ? `<span class="badge neutro">${fmtMl(g[f.codice].transito)}</span>` : '';
-    return `<tr><td class="cod">${f.codice}</td><td>${esc(f.brand ? f.brand + ' - ' : '')}${esc(f.nome)}${f.attivo === false ? ' <span class="badge grigio">disattivata</span>' : ''}</td><td class="muted piccolo-testo">${esc(f.categoria)}</td>${NEGOZI.map(n => cellaMl(f, n)).join('')}<td class="num">${tr}</td><td class="num muted">${sogliaDi(f)} / ${obiettivoDi(f)}</td><td><button class="piccolo azione-piano" data-piu="${f.codice}" title="Ordina o sposta questa referenza">Ordina o sposta</button></td></tr>`;
+    const io = NEGOZI.map(n => [n, ord[f.codice]?.[n] || 0]).filter(([, v]) => v);
+    return `<tr><td class="cod">${f.codice}</td><td>${esc(f.brand ? f.brand + ' - ' : '')}${esc(f.nome)}${f.attivo === false ? ' <span class="badge grigio">disattivata</span>' : ''}</td><td class="muted piccolo-testo">${esc(f.categoria)}</td>${NEGOZI.map(n => cellaMl(f, n)).join('')}<td class="num">${tr}</td><td class="num">${io.map(([n, v]) => `<span class="badge ordine">${fmtMl(v)} → ${n}</span>`).join('<br>')}</td><td class="num muted">${sogliaDi(f)} / ${obiettivoDi(f)}</td><td><button class="piccolo azione-piano" data-piu="${f.codice}" title="Ordina o sposta questa referenza">Ordina o sposta</button></td></tr>`;
   }).join('');
 
   const chips = [];
@@ -337,16 +348,18 @@ function renderMagazzino() {
     const p = proposta(x.f, x.negozio, g, vel);
     const mitt = altro(x.negozio); const alt = g[x.f.codice]?.[mitt] || 0;
     const k = chiavePiano(x.f.codice, x.negozio);
+    const giaOrd = ord[x.f.codice]?.[x.negozio] || 0;
     const rio = stato.piano.riordini[k], spo = stato.piano.spostamenti[k];
     const spoPossibile = alt > 0 && p.tipo !== 'in_arrivo';
     const cop = n => vel.attiva ? `<div class="cop">${fmtCop(copertura(g[x.f.codice]?.[n] || 0, vel.per[x.f.codice]?.[n] || 0))}</div>` : '';
     let info;
-    if (p.tipo === 'sposta') info = `Proposta: <b>${p.ml} ml da ${p.da}</b> · ${p.da} resta con ${fmtMl(p.resta)}${p.modo === 'copertura' ? ' · copertura pari' : ''}`;
+    if (giaOrd) info = `<span class="badge ordine">già ordinati ${fmtMl(giaOrd)}</span> in attesa di consegna${p.tipo === 'sposta' ? ` · si può anche spostare subito ${p.ml} ml da ${p.da}` : ''}`;
+    else if (p.tipo === 'sposta') info = `Proposta: <b>${p.ml} ml da ${p.da}</b> · ${p.da} resta con ${fmtMl(p.resta)}${p.modo === 'copertura' ? ' · copertura pari' : ''}`;
     else if (p.tipo === 'in_arrivo') info = `<span class="badge neutro">in arrivo ${fmtMl(p.ml)}</span> vedi Trasferimenti`;
     else info = `<span class="badge sotto">da riordinare</span> ${esc(p.motivo)}`;
-    return `<tr class="${x.stato}"><td class="cod">${x.f.codice}</td><td>${esc(x.f.brand)} ${esc(x.f.nome)}<div class="cop">${esc(x.f.categoria)}</div></td><td>${x.negozio}</td><td class="num"><span class="badge ${x.stato}">${fmtMl(x.ml)}</span>${cop(x.negozio)}</td><td class="num muted">${x.soglia} / ${obiettivoDi(x.f)}</td><td class="num">${mitt}: ${fmtMl(alt)}${cop(mitt)}</td>
+    return `<tr class="${x.stato}"><td class="cod">${x.f.codice}</td><td>${esc(x.f.brand)} ${esc(x.f.nome)}<div class="cop">${esc(x.f.categoria)}</div></td><td>${x.negozio}</td><td class="num"><span class="badge ${x.stato}">${fmtMl(x.ml)}</span>${giaOrd ? `<div class="cop"><span class="badge ordine">+${fmtMl(giaOrd)}</span></div>` : ''}${cop(x.negozio)}</td><td class="num muted">${x.soglia} / ${obiettivoDi(x.f)}</td><td class="num">${mitt}: ${fmtMl(alt)}${cop(mitt)}</td>
       <td class="pian"><div class="cop">${info}</div>
-        <label class="chk2"><input type="checkbox" data-rio="${k}" ${rio ? 'checked' : ''}> Riordina${rio ? ` <b>${rio.ml} ml</b>` : ''}</label>
+        <label class="chk2"><input type="checkbox" data-rio="${k}" ${rio ? 'checked' : ''}> Riordina${rio ? ` <b>${rio.ml} ml</b>` : ''}${giaOrd && !rio ? ` <span class="muted">(ancora?)</span>` : ''}</label>
         <label class="chk2${spoPossibile ? '' : ' disab'}"><input type="checkbox" data-spo="${k}" ${spo ? 'checked' : ''} ${spoPossibile ? '' : 'disabled'}> Sposta da ${mitt}${spo ? ` <b>${spo.ml} ml</b>` : ''}</label></td></tr>`;
   };
   const kpi = (cls, v, l, dati) => `<button class="card kpi-btn ${cls}" data-kpi='${JSON.stringify(dati)}' title="Apri la vista filtrata"><div class="v">${v}</div><div class="l">${l}</div></button>`;
@@ -354,6 +367,7 @@ function renderMagazzino() {
     <div class="kpi">
       ${NEGOZI.map(n => { const k = ss.filter(x => x.negozio === n).length; return kpi(k ? 'warn' : '', k, `sotto scorta a ${n}`, { negozio: n, stato: 'sotto', sort: n, dir: 1 }) + kpi('', `${(tot[n] / 1000).toLocaleString('it-IT', { maximumFractionDigits: 1 })} L`, `totale ${n} · ${fr.length} referenze`, { negozio: n, stato: null, sort: n, dir: -1 }); }).join('')}
       ${kpi('teal', fmtMl(transito), 'in transito tra negozi', { tab: 'trasferimenti' })}
+      ${(() => { const t = stato.ordini.reduce((a, o) => a + righePendenti(o).reduce((b, r) => b + r.ml, 0), 0); const n = stato.ordini.filter(o => righePendenti(o).length).length; return kpi('teal', fmtMl(t), n ? `in ordine · ${n} ${n === 1 ? 'ordine' : 'ordini'} da ricevere` : 'in ordine dai fornitori', { tab: 'movimenti' }); })()}
     </div>
     ${ssVis.length ? `<details class="card avviso" id="pannello-proposte" ${pannelloAperto ? 'open' : ''}><summary>Da riordinare o spostare: ${ssVis.length} ${ssVis.length === 1 ? 'caso' : 'casi'}${chips.length ? ` <span class="muted piccolo-testo">(con i filtri attivi)</span>` : ''}</summary>
       <p class="piccolo-testo" style="margin:10px 0 12px">${spiegazione} Spunta <b>Riordina</b> o <b>Sposta</b> sulle voci che vuoi trattare, poi apri il <b>Piano</b> per rifinire quantità e confermare.</p>
@@ -370,7 +384,7 @@ function renderMagazzino() {
       </div>
       ${chips.length ? `<div class="chips">Filtri: ${chips.map(([k, v]) => `<button class="chip" data-chip="${k}">${esc(v)} ✕</button>`).join('')}<button class="chip azzera" data-chip="tutti">Azzera</button><span class="muted piccolo-testo">${visibili.length} referenze</span></div>` : ''}
       <p class="muted piccolo-testo" style="margin:0 0 8px">Tocca l'intestazione di una colonna per ordinare. Con <b>Ordina o sposta</b> aggiungi al piano qualsiasi referenza, anche se non è sotto scorta. ${vel.attiva ? `Sotto ogni giacenza: copertura stimata in settimane di vendita.` : `La copertura in settimane di vendita comparirà sotto ogni giacenza dopo ${SETTIMANE_MIN} settimane di vendite caricate.`}</p>
-      <div class="tabella-wrap"><table><thead><tr>${th('codice', 'Codice')}${th('nome', 'Referenza')}${th('categoria', 'Categoria')}${NEGOZI.map(n => th(n, n, 'num')).join('')}${th('transito', 'In transito', 'num')}${th('minima', 'Min / Obiettivo', 'num')}<th></th></tr></thead><tbody>${righe || '<tr><td colspan="8" class="vuoto">Nessuna referenza corrisponde ai filtri.</td></tr>'}</tbody></table></div>
+      <div class="tabella-wrap"><table><thead><tr>${th('codice', 'Codice')}${th('nome', 'Referenza')}${th('categoria', 'Categoria')}${NEGOZI.map(n => th(n, n, 'num')).join('')}${th('transito', 'In transito', 'num')}${th('ordine', 'In ordine', 'num')}${th('minima', 'Min / Obiettivo', 'num')}<th></th></tr></thead><tbody>${righe || '<tr><td colspan="9" class="vuoto">Nessuna referenza corrisponde ai filtri.</td></tr>'}</tbody></table></div>
     </div>`;
   $('#cerca').oninput = e => { filtro.testo = e.target.value; renderMagazzinoSoloTabella(); };
   const pannello = $('#pannello-proposte'); if (pannello) pannello.ontoggle = () => { pannelloAperto = pannello.open; };
@@ -404,7 +418,7 @@ function renderMagazzino() {
     for (const x of ssVis) {
       const p = proposta(x.f, x.negozio, g, vel); const k = chiavePiano(x.f.codice, x.negozio);
       if (m === 'spo' && p.tipo === 'sposta') stato.piano.spostamenti[k] = { codice: x.f.codice, da: p.da, a: p.a, ml: p.ml };
-      if (m === 'rio' && p.tipo === 'no') stato.piano.riordini[k] = { codice: x.f.codice, negozio: x.negozio, ml: mlRiordinoDefault(x.f, x.negozio, g), fornitore: fornitorePreferito(x.f) || '', note: '' };
+      if (m === 'rio' && p.tipo === 'no' && !(ord[x.f.codice]?.[x.negozio] || 0)) stato.piano.riordini[k] = { codice: x.f.codice, negozio: x.negozio, ml: mlRiordinoDefault(x.f, x.negozio, g), fornitore: fornitorePreferito(x.f) || '', note: '' };
     }
     salvaPiano(); render();
   });
@@ -446,7 +460,7 @@ function dialogPiano({ codice = '', tipo = 'riordino', negozio = NEGOZI[0], da =
     if (!f) { $('#p-info').innerHTML = '<span class="muted">Scegli una referenza per vedere le giacenze.</span>'; $('#p-ok').disabled = true; return; }
     $('#p-ok').disabled = false;
     const cop = n => vel.attiva ? ` <span class="muted">(${fmtCop(copertura(g[c]?.[n] || 0, vel.per[c]?.[n] || 0))})</span>` : '';
-    $('#p-info').innerHTML = `<b>${esc(f.categoria)}</b> · scorta minima ${sogliaDi(f)} ml, obiettivo ${obiettivoDi(f)} ml<br>${NEGOZI.map(n => `${n}: <b>${fmtMl(g[c]?.[n] || 0)}</b>${cop(n)}`).join(' &nbsp;·&nbsp; ')}`;
+    $('#p-info').innerHTML = `<b>${esc(f.categoria)}</b> · scorta minima ${sogliaDi(f)} ml, obiettivo ${obiettivoDi(f)} ml<br>${NEGOZI.map(n => { const io = mlInOrdine(c, n); return `${n}: <b>${fmtMl(g[c]?.[n] || 0)}</b>${io ? ` <span class="badge ordine">+${fmtMl(io)} in ordine</span>` : ''}${cop(n)}`; }).join(' &nbsp;·&nbsp; ')}`;
     if (ricalcolaMl) form.ml.value = t === 'riordino' ? mlRiordinoDefault(f, ricevente, g) : mlSpostamentoDefault(f, ricevente, g, proposta(f, ricevente, g, vel));
     verifica();
   };
