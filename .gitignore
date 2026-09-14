@@ -1,0 +1,10 @@
+# Export grezzi del cliente (restano solo in locale)
+*.xlsx
+*.csv
+~$*
+dati/latina_export.json
+# Build per la pubblicazione su claude.ai
+build/
+# Sistema e strumenti
+.DS_Store
+.claude/

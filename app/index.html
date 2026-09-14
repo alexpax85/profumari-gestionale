@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#121212">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="favicon.svg">
+<link rel="stylesheet" href="fonts/assistant.css">
+<title>Magazzino i profumari</title>
+<link rel="manifest" href="manifest.json">
+<link rel="stylesheet" href="style.css">
+<script src="lib/xlsx.full.min.js"></script>
+<script src="demo-data.js"></script>
+</head>
+<body>
+<header class="top">
+  <div class="brand"><img src="logo.svg" alt="i profumari" class="logo"><span class="sep"></span><h1>Magazzino</h1></div>
+  <div class="agg" id="aggiornamento"></div>
+</header>
+<nav class="tabs" id="tabs">
+  <button data-tab="magazzino" class="attivo">Giacenze</button>
+  <button data-tab="piano">Piano</button>
+  <button data-tab="vendite">Vendite</button>
+  <button data-tab="trasferimenti">Trasferimenti</button>
+  <button data-tab="movimenti">Carichi</button>
+  <button data-tab="anagrafica">Referenze e soglie</button>
+  <button data-tab="storico">Storico e backup</button>
+</nav>
+<main>
+  <section class="tab attivo" id="tab-magazzino"></section>
+  <section class="tab" id="tab-piano"></section>
+  <section class="tab" id="tab-vendite"></section>
+  <section class="tab" id="tab-trasferimenti"></section>
+  <section class="tab" id="tab-movimenti"></section>
+  <section class="tab" id="tab-anagrafica"></section>
+  <section class="tab" id="tab-storico"></section>
+</main>
+<dialog id="dlg"></dialog>
+<div id="toast"></div>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
