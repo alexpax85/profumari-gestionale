@@ -38,9 +38,15 @@ export function normalizzaRigaMagazzino(nomeOriginale) {
   return { codice, brand, nome, variante, nomeCompleto: brand ? `${brand} - ${nome}` : nome };
 }
 
+/** "UOMO" / "03 NICCHIA" / "nicchia" -> categoria canonica, oppure null. */
+export function categoriaDaTesto(t) {
+  const u = String(t ?? '').toUpperCase().replace(/[^A-Z]/g, '');
+  return CATEGORIE.find(c => c.replace(/[^A-Z]/g, '') === u) || null;
+}
+
 /**
- * Elenco righe { nome, quantita } -> { fragranze: [...], ignorate: [...] }.
- * Le righe con lo stesso codice vengono aggregate (ml sommati, varianti in nota).
+ * Elenco righe { nome, quantita, genere?, fornitori? } -> { fragranze: [...], ignorate: [...] }.
+ * Le righe con lo stesso codice vengono aggregate (ml sommati, varianti in nota, codici fornitore uniti).
  */
 export function normalizzaMagazzino(righe) {
   const perCodice = new Map();
@@ -49,11 +55,13 @@ export function normalizzaMagazzino(righe) {
     const n = normalizzaRigaMagazzino(r.nome);
     const q = Number(r.quantita) || 0;
     if (!n) { ignorate.push({ nome: r.nome, quantita: q }); continue; }
-    if (!perCodice.has(n.codice)) perCodice.set(n.codice, { codice: n.codice, candidati: [], ml: 0, righe: [] });
+    if (!perCodice.has(n.codice)) perCodice.set(n.codice, { codice: n.codice, candidati: [], ml: 0, righe: [], fornitori: {}, genere: null });
     const e = perCodice.get(n.codice);
     e.candidati.push(n);
     e.ml += q;
     e.righe.push({ nome: r.nome, quantita: q, variante: n.variante });
+    for (const [sigla, cod] of Object.entries(r.fornitori || {})) { const v = String(cod ?? '').trim(); if (v && !e.fornitori[sigla]) e.fornitori[sigla] = v; }
+    if (!e.genere) e.genere = categoriaDaTesto(r.genere);
   }
   const fragranze = [...perCodice.values()].map(e => {
     // nome canonico: il più frequente, a parità il più corto
@@ -64,8 +72,8 @@ export function normalizzaMagazzino(righe) {
     const varianti = [...new Set(e.candidati.map(x => x.variante).filter(Boolean))];
     const nomiDiversi = [...conta.keys()].filter(k => k !== migliore);
     return {
-      codice: e.codice, brand: c.brand, nome: c.nome, categoria: categoriaDaCodice(e.codice),
-      ml: e.ml, varianti, nomiDiversi, righe: e.righe,
+      codice: e.codice, brand: c.brand, nome: c.nome, categoria: e.genere || categoriaDaCodice(e.codice),
+      ml: e.ml, varianti, nomiDiversi, righe: e.righe, fornitori: e.fornitori,
     };
   }).sort((a, b) => a.codice.localeCompare(b.codice));
   return { fragranze, ignorate };

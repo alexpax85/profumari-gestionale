@@ -21,7 +21,8 @@ export function statoVuoto() {
     trasferimenti: [],  // { id, ts, da, a, codice, ml, stato, storia[] , note}
     chiaviVendite: {},  // chiave riga vendita -> id lotto (anti doppio import)
     piano: { riordini: {}, spostamenti: {} },  // selezioni in corso dal pannello "Da riordinare o spostare"
-    ordini: [],         // liste di riordino confermate { id, ts, righe[], totMl }
+    ordini: [],         // ordini confermati { id, ts, fornitore, negozio, righe[], totMl }
+    fornitori: [],      // { sigla, nome }
   };
 }
 

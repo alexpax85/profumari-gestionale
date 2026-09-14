@@ -49,10 +49,21 @@ l'app non ha dipendenze esterne e funziona anche offline.
   - con almeno 4 settimane di vendite caricate (`SETTIMANE_MIN` in `app.js`) la proposta equilibra la **copertura** (settimane di vendita davanti) tra i due negozi, con lo stesso limite; la copertura compare anche sotto ogni giacenza;
   - nessuna proposta porta chi riceve oltre `ORIZZONTE_SETT` (8) settimane di copertura, così chi cede non viene svuotato;
   - sotto i 50 ml non si propone nulla e la riga dice "da riordinare" con il motivo.
+- **Fornitori**: ogni referenza ha i codici prodotto dei fornitori che la trattano (colonne PL, PF, VF… dell'inventario, o inseriti a mano in Referenze). I fornitori hanno sigla e nome esteso, gestiti nella scheda Referenze e soglie.
+- **Ordini**: nel Piano le voci di riordino si raggruppano per fornitore + negozio di consegna; per ogni gruppo si genera l'ordine in Excel (.xlsx), in PDF (stampa dall'iPad) o come testo, e lo si conferma: resta in Storico, da dove si può riscaricare.
 - **Fuori soglia**: dalla tabella giacenze, il pulsante *Ordina o sposta* su ogni riga (e *+ Aggiungi voce* nel Piano) apre una finestra per mettere a piano un riordino o uno spostamento di qualsiasi referenza, anche non sotto scorta, con giacenze, copertura, quantità suggerita e avviso sull'effetto dello spostamento.
 - Trasferimento in tre passi: *proposto → spedito* (ml in transito) *→ ricevuto*.
 - **Giacenze**: i numeri in testata aprono viste filtrate; la tabella ha categoria, filtri (categoria, negozio, stato) e ordinamento per colonna.
 - **Piano**: dal pannello "Da riordinare o spostare" si spuntano *Riordina* e/o *Sposta* per ogni voce; la scheda Piano mostra la lista riordino (quantità e note modificabili, stima costo da "€/100 ml", copia testo, CSV, stampa, conferma → salvata in Storico) e la lista trasferimenti (ml modificabili con giacenze prima/dopo e avvisi, creazione in blocco dei trasferimenti in stato "proposto"). Le spunte sono salvate e restano finché non si conferma o si toglie la voce.
+
+## Come inserire un nuovo prodotto (istruzioni per il titolare)
+
+1. In **Referenze e soglie** → "+ Nuova referenza": codice a 3 cifre libero nella fascia giusta (0xx uomo, 2xx/3xx donna, 5xx/6xx nicchia, 8xx premium), brand, nome, codici dei fornitori.
+2. Nel **gestionale di cassa** creare un articolo per formato con descrizione esattamente `codice formato`, es. `545 30ML`, `545 50ML`, `545 100ML` (codice all'inizio, spazio, ml seguiti da "ML"), e la categoria corrispondente.
+3. Se lo stesso profumo arriva da un altro fornitore **non** si crea un nuovo codice: si aggiunge il codice del nuovo fornitore alla referenza esistente.
+4. All'arrivo della merce registrare il **Carico** sul negozio giusto.
+
+Le stesse istruzioni sono nell'app, in fondo alla scheda Referenze e soglie.
 
 ## Prossimi passi (fase 2)
 
