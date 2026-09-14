@@ -154,3 +154,7 @@ tfoot td { border-top: 2px solid var(--line); background: var(--bg2); }
   details.card.avviso td, details.card.avviso th { padding-left: 5px; padding-right: 5px; }
 }
 td.pian .cop { white-space: normal; }
+button.azione-piano { white-space: nowrap; font-size: .72rem; padding: 0 10px; }
+#form-piano .card.info { border-left-width: 3px; }
+#p-avviso.badge { display: inline-block; }
+[hidden] { display: none !important; }

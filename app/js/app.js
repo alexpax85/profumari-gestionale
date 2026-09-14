@@ -7,6 +7,7 @@ if (!stato.obiettivi) { stato.obiettivi = {}; for (const c of CATEGORIE) stato.o
 if (!stato.piano) stato.piano = { riordini: {}, spostamenti: {} };
 if (!stato.ordini) stato.ordini = [];
 const SETTIMANE_MIN = 4;   // settimane di vendite necessarie per attivare le proposte basate sulla copertura
+const ORIZZONTE_SETT = 8;  // nessuna proposta porta chi riceve oltre questa copertura: evita di svuotare chi cede
 let tab = 'magazzino';
 let filtro = { testo: '', negozio: null, categoria: null, stato: null, sort: 'codice', dir: 1 };
 let pannelloAperto = false;   // apertura del pannello "Da riordinare o spostare", scelta dall'utente
@@ -80,11 +81,16 @@ function proposta(f, ricevente, g, vel) {
   let ml = obiettivo - gR, modo = 'obiettivo';
   if (vel.attiva) {
     const vR = vel.per[f.codice]?.[ricevente] || 0, vM = vel.per[f.codice]?.[mittente] || 0;
-    if (vR > 0) { ml = (vR * gM - vM * gR) / (vR + vM); modo = 'copertura'; }
+    if (vR > 0) {
+      const equilibrio = (vR * gM - vM * gR) / (vR + vM);
+      // tetto: non portare chi riceve oltre ORIZZONTE_SETT settimane di copertura (né sotto quanto serve per l'obiettivo)
+      ml = Math.min(equilibrio, Math.max(vR * ORIZZONTE_SETT - gR, obiettivo - gR));
+      modo = 'copertura';
+    }
   }
   ml = Math.floor(Math.min(ml, cedibile) / 10) * 10;
   if (ml < 50) {
-    let motivo = cedibile < 50 ? `${mittente} ha solo ${fmtMl(Math.max(0, cedibile))} oltre la scorta minima` : modo === 'copertura' ? `${ricevente} ha già una copertura pari o superiore a ${mittente}` : 'spostamento troppo piccolo';
+    let motivo = cedibile < 50 ? `${mittente} ha solo ${fmtMl(Math.max(0, cedibile))} oltre la scorta minima` : modo === 'copertura' ? `${ricevente} ha già scorta sufficiente rispetto a ${mittente}` : 'spostamento troppo piccolo';
     return { tipo: 'no', motivo };
   }
   return { tipo: 'sposta', ml, da: mittente, a: ricevente, resta: gM - ml, modo };
@@ -152,11 +158,11 @@ function chiavePiano(codice, negozio) { return `${codice}|${negozio}`; }
 function arr10(x, su) { return su ? Math.ceil(x / 10) * 10 : Math.floor(x / 10) * 10; }
 function salvaPiano() { store.save(stato, 'piano', false); }
 function contaPiano() { return Object.keys(stato.piano.riordini).length + Object.keys(stato.piano.spostamenti).length; }
-function mlRiordinoDefault(f, negozio, g) { return Math.max(10, arr10(obiettivoDi(f) - (g[f.codice]?.[negozio] || 0), true)); }
+function mlRiordinoDefault(f, negozio, g) { const serve = obiettivoDi(f) - (g[f.codice]?.[negozio] || 0); return serve >= 10 ? arr10(serve, true) : 100; }
 function mlSpostamentoDefault(f, ricevente, g, p) {
   if (p.tipo === 'sposta') return p.ml;
   const gM = g[f.codice]?.[altro(ricevente)] || 0;
-  const serve = arr10(obiettivoDi(f) - (g[f.codice]?.[ricevente] || 0), true);
+  const serve = Math.max(100, arr10(obiettivoDi(f) - (g[f.codice]?.[ricevente] || 0), true));
   const cedibile = arr10(gM - sogliaDi(f), false);
   // se chi cede ha eccedenza, si usa quella; altrimenti si propone di dividere a metà quello che ha
   return Math.max(10, cedibile >= 10 ? Math.min(serve, cedibile) : Math.min(serve, arr10(gM / 2, false)));
@@ -194,7 +200,7 @@ function renderMagazzino() {
   const cellaMl = (f, n) => { const ml = g[f.codice]?.[n] || 0; const st = statoDi(f, n); return `<td class="num${filtro.negozio === n ? ' evid' : ''}"><span class="badge ${st}">${fmtMl(ml)}</span>${vel.attiva ? `<div class="cop">${fmtCop(copertura(ml, vel.per[f.codice]?.[n] || 0))}</div>` : ''}</td>`; };
   const righe = visibili.map(f => {
     const tr = g[f.codice]?.transito ? `<span class="badge neutro">${fmtMl(g[f.codice].transito)}</span>` : '';
-    return `<tr><td class="cod">${f.codice}</td><td>${esc(f.brand ? f.brand + ' - ' : '')}${esc(f.nome)}${f.attivo === false ? ' <span class="badge grigio">disattivata</span>' : ''}</td><td class="muted piccolo-testo">${esc(f.categoria)}</td>${NEGOZI.map(n => cellaMl(f, n)).join('')}<td class="num">${tr}</td><td class="num muted">${sogliaDi(f)} / ${obiettivoDi(f)}</td></tr>`;
+    return `<tr><td class="cod">${f.codice}</td><td>${esc(f.brand ? f.brand + ' - ' : '')}${esc(f.nome)}${f.attivo === false ? ' <span class="badge grigio">disattivata</span>' : ''}</td><td class="muted piccolo-testo">${esc(f.categoria)}</td>${NEGOZI.map(n => cellaMl(f, n)).join('')}<td class="num">${tr}</td><td class="num muted">${sogliaDi(f)} / ${obiettivoDi(f)}</td><td><button class="piccolo azione-piano" data-piu="${f.codice}" title="Ordina o sposta questa referenza">Ordina o sposta</button></td></tr>`;
   }).join('');
 
   const chips = [];
@@ -242,8 +248,8 @@ function renderMagazzino() {
         <select id="f-stato" class="sel"><option value="">Qualsiasi stato</option>${Object.entries(ETICH_STATO).map(([k, v]) => `<option value="${k}" ${filtro.stato === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
       </div>
       ${chips.length ? `<div class="chips">Filtri: ${chips.map(([k, v]) => `<button class="chip" data-chip="${k}">${esc(v)} ✕</button>`).join('')}<button class="chip azzera" data-chip="tutti">Azzera</button><span class="muted piccolo-testo">${visibili.length} referenze</span></div>` : ''}
-      <p class="muted piccolo-testo" style="margin:0 0 8px">Tocca l'intestazione di una colonna per ordinare. ${vel.attiva ? `Sotto ogni giacenza: copertura stimata in settimane di vendita.` : `La copertura in settimane di vendita comparirà sotto ogni giacenza dopo ${SETTIMANE_MIN} settimane di vendite caricate.`}</p>
-      <div class="tabella-wrap"><table><thead><tr>${th('codice', 'Codice')}${th('nome', 'Referenza')}${th('categoria', 'Categoria')}${NEGOZI.map(n => th(n, n, 'num')).join('')}${th('transito', 'In transito', 'num')}${th('minima', 'Min / Obiettivo', 'num')}</tr></thead><tbody>${righe || '<tr><td colspan="7" class="vuoto">Nessuna referenza corrisponde ai filtri.</td></tr>'}</tbody></table></div>
+      <p class="muted piccolo-testo" style="margin:0 0 8px">Tocca l'intestazione di una colonna per ordinare. Con <b>Ordina o sposta</b> aggiungi al piano qualsiasi referenza, anche se non è sotto scorta. ${vel.attiva ? `Sotto ogni giacenza: copertura stimata in settimane di vendita.` : `La copertura in settimane di vendita comparirà sotto ogni giacenza dopo ${SETTIMANE_MIN} settimane di vendite caricate.`}</p>
+      <div class="tabella-wrap"><table><thead><tr>${th('codice', 'Codice')}${th('nome', 'Referenza')}${th('categoria', 'Categoria')}${NEGOZI.map(n => th(n, n, 'num')).join('')}${th('transito', 'In transito', 'num')}${th('minima', 'Min / Obiettivo', 'num')}<th></th></tr></thead><tbody>${righe || '<tr><td colspan="8" class="vuoto">Nessuna referenza corrisponde ai filtri.</td></tr>'}</tbody></table></div>
     </div>`;
   $('#cerca').oninput = e => { filtro.testo = e.target.value; renderMagazzinoSoloTabella(); };
   const pannello = $('#pannello-proposte'); if (pannello) pannello.ontoggle = () => { pannelloAperto = pannello.open; };
@@ -251,6 +257,7 @@ function renderMagazzino() {
   $('#f-negozio').onchange = e => { filtro.negozio = e.target.value || null; render(); };
   $('#f-stato').onchange = e => { filtro.stato = e.target.value || null; render(); };
   $$('[data-chip]', el).forEach(b => b.onclick = () => { const k = b.dataset.chip; if (k === 'tutti') { filtro.negozio = filtro.stato = filtro.categoria = null; } else filtro[k] = null; render(); });
+  $$('[data-piu]', el).forEach(b => b.onclick = () => dialogPiano({ codice: b.dataset.piu }));
   $$('th[data-sort]', el).forEach(h => h.onclick = () => { const k = h.dataset.sort; if (filtro.sort === k) filtro.dir = -filtro.dir; else { filtro.sort = k; filtro.dir = 1; } render(); });
   $$('[data-kpi]', el).forEach(b => b.onclick = () => {
     const d = JSON.parse(b.dataset.kpi);
@@ -283,13 +290,92 @@ function renderMagazzino() {
 }
 function renderMagazzinoSoloTabella() { const pos = $('#cerca').selectionStart; renderMagazzino(); const c = $('#cerca'); c.focus(); c.setSelectionRange(pos, pos); }
 
+/** Finestra per aggiungere o modificare a mano una voce del piano (riordino o spostamento), per qualsiasi referenza. */
+function dialogPiano({ codice = '', tipo = 'riordino', negozio = NEGOZI[0], da = null } = {}) {
+  const g = giacenze(), vel = velocita();
+  const d = $('#dlg');
+  const opzioni = fragranzeOrdinate().filter(f => f.attivo !== false || f.codice === codice).map(f => `<option value="${f.codice}" ${f.codice === codice ? 'selected' : ''}>${esc(nomeF(f.codice))}</option>`).join('');
+  d.innerHTML = `<h2>Ordina o sposta</h2>
+    <form id="form-piano">
+      <div class="riga"><label class="campo" style="flex:1 1 100%">Referenza<select name="codice"><option value="">— scegli —</option>${opzioni}</select></label></div>
+      <div id="p-info" class="card info" style="margin:12px 0;padding:12px"></div>
+      <div class="riga"><label class="campo">Operazione<select name="tipo">
+        <option value="riordino" ${tipo === 'riordino' ? 'selected' : ''}>Riordino dal fornitore</option>
+        <option value="spostamento" ${tipo === 'spostamento' ? 'selected' : ''}>Spostamento tra negozi</option></select></label>
+        <label class="campo" id="p-l-negozio">Negozio<select name="negozio">${NEGOZI.map(n => `<option ${n === negozio ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
+        <label class="campo" id="p-l-da" hidden>Da<select name="da">${NEGOZI.map(n => `<option ${n === (da || altro(negozio)) ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
+        <label class="campo">ml<input name="ml" type="number" min="10" step="10" inputmode="numeric" required></label></div>
+      <div class="riga"><label class="campo" style="flex:1 1 100%">Nota<input name="note" placeholder="facoltativa, es. richiesta cliente"></label></div>
+      <p id="p-avviso" class="piccolo-testo" style="margin:10px 0 0"></p>
+      <div class="azioni"><button type="button" id="p-annulla">Annulla</button><button type="submit" class="primario" id="p-ok">Aggiungi al piano</button></div>
+    </form>`;
+  const form = $('#form-piano');
+  const stato_ = () => {
+    const c = form.codice.value, t = form.tipo.value;
+    const ricevente = form.negozio.value, mittente = t === 'spostamento' ? form.da.value : null;
+    return { c, t, ricevente, mittente, f: c ? stato.fragranze[c] : null };
+  };
+  const aggiornaInfo = (ricalcolaMl = true) => {
+    const { c, t, ricevente, mittente, f } = stato_();
+    form.querySelector('#p-l-da').hidden = t !== 'spostamento';
+    form.querySelector('#p-l-negozio').firstChild.textContent = t === 'spostamento' ? 'A' : 'Negozio';
+    if (!f) { $('#p-info').innerHTML = '<span class="muted">Scegli una referenza per vedere le giacenze.</span>'; $('#p-ok').disabled = true; return; }
+    $('#p-ok').disabled = false;
+    const cop = n => vel.attiva ? ` <span class="muted">(${fmtCop(copertura(g[c]?.[n] || 0, vel.per[c]?.[n] || 0))})</span>` : '';
+    $('#p-info').innerHTML = `<b>${esc(f.categoria)}</b> · scorta minima ${sogliaDi(f)} ml, obiettivo ${obiettivoDi(f)} ml<br>${NEGOZI.map(n => `${n}: <b>${fmtMl(g[c]?.[n] || 0)}</b>${cop(n)}`).join(' &nbsp;·&nbsp; ')}`;
+    if (ricalcolaMl) form.ml.value = t === 'riordino' ? mlRiordinoDefault(f, ricevente, g) : mlSpostamentoDefault(f, ricevente, g, proposta(f, ricevente, g, vel));
+    verifica();
+  };
+  const verifica = () => {
+    const { c, t, ricevente, mittente, f } = stato_();
+    const ml = Number(form.ml.value) || 0;
+    const av = $('#p-avviso');
+    av.className = 'piccolo-testo'; av.textContent = '';
+    if (!f || !ml) return;
+    if (t === 'spostamento') {
+      if (mittente === ricevente) { av.className = 'piccolo-testo badge esaurito'; av.textContent = 'I due negozi devono essere diversi.'; return; }
+      const gM = g[c]?.[mittente] || 0, gR = g[c]?.[ricevente] || 0;
+      if (ml > gM) { av.className = 'piccolo-testo badge esaurito'; av.textContent = `${mittente} ha solo ${fmtMl(gM)}.`; return; }
+      const resta = gM - ml;
+      av.innerHTML = `Dopo lo spostamento: ${mittente} ${fmtMl(resta)}, ${ricevente} ${fmtMl(gR + ml)}.` + (resta < sogliaDi(f) ? ` <span class="badge sotto">${mittente} scende sotto la minima (${sogliaDi(f)})</span>` : '');
+    } else {
+      av.innerHTML = `Dopo il carico: ${ricevente} ${fmtMl((g[c]?.[ricevente] || 0) + ml)} (obiettivo ${obiettivoDi(f)} ml).`;
+    }
+  };
+  form.codice.onchange = () => aggiornaInfo();
+  form.tipo.onchange = () => aggiornaInfo();
+  form.negozio.onchange = () => { if (form.tipo.value === 'spostamento') form.da.value = altro(form.negozio.value); aggiornaInfo(); };
+  form.da.onchange = () => { form.negozio.value = altro(form.da.value); aggiornaInfo(); };
+  form.ml.oninput = verifica;
+  $('#p-annulla').onclick = () => d.close();
+  form.onsubmit = e => {
+    e.preventDefault();
+    const { c, t, ricevente, mittente, f } = stato_();
+    const ml = Math.max(10, arr10(Number(form.ml.value) || 0, false));
+    if (!f || !ml) { toast('Scegli la referenza e i ml.'); return; }
+    const k = chiavePiano(c, ricevente);
+    if (t === 'riordino') stato.piano.riordini[k] = { codice: c, negozio: ricevente, ml, note: form.note.value };
+    else {
+      if (mittente === ricevente) { toast('I due negozi devono essere diversi.'); return; }
+      if (ml > (g[c]?.[mittente] || 0)) { toast(`${mittente} ha solo ${fmtMl(g[c]?.[mittente] || 0)} di ${c}.`); return; }
+      stato.piano.spostamenti[k] = { codice: c, da: mittente, a: ricevente, ml, note: form.note.value };
+    }
+    salvaPiano(); d.close();
+    toast(`${t === 'riordino' ? 'Riordino' : 'Spostamento'} aggiunto al piano: ${ml} ml di ${c}.`, { label: 'Apri il piano', fn: () => { tab = 'piano'; render(); window.scrollTo(0, 0); } });
+    render();
+  };
+  aggiornaInfo();
+  d.showModal();
+}
+
 function renderPiano() {
   const el = $('#tab-piano');
   const g = giacenze(), vel = velocita();
   const rio = Object.entries(stato.piano.riordini).sort((a, b) => a[1].codice.localeCompare(b[1].codice) || a[1].negozio.localeCompare(b[1].negozio));
   const spo = Object.entries(stato.piano.spostamenti).sort((a, b) => a[1].codice.localeCompare(b[1].codice));
   if (!rio.length && !spo.length) {
-    el.innerHTML = `<div class="card info"><h2>Piano di riordino e trasferimenti</h2><p>Qui arrivano le voci che spunti nel pannello <b>Da riordinare o spostare</b> della scheda Giacenze. Per ogni voce potrai rifinire la quantità, poi confermare la lista d'ordine per il fornitore e creare i trasferimenti tra i negozi in un colpo solo.</p><div class="azioni"><button class="primario" data-vai="magazzino">Vai alle giacenze</button></div>${stato.ordini.length ? `<p class="muted piccolo-testo" style="margin-top:12px">Le liste già confermate sono in <b>Storico e backup</b>.</p>` : ''}</div>`;
+    el.innerHTML = `<div class="card info"><h2>Piano di riordino e trasferimenti</h2><p>Qui arrivano le voci che spunti nel pannello <b>Da riordinare o spostare</b> della scheda Giacenze. Per ogni voce potrai rifinire la quantità, poi confermare la lista d'ordine per il fornitore e creare i trasferimenti tra i negozi in un colpo solo.</p><div class="azioni"><button class="primario" data-vai="magazzino">Vai alle giacenze</button><button id="piano-nuovo">Aggiungi una voce a mano</button></div>${stato.ordini.length ? `<p class="muted piccolo-testo" style="margin-top:12px">Le liste già confermate sono in <b>Storico e backup</b>.</p>` : ''}</div>`;
+    const bn = $('#piano-nuovo'); if (bn) bn.onclick = () => dialogPiano({});
     return;
   }
   const cop = (codice, n) => vel.attiva ? `<div class="cop">${fmtCop(copertura(g[codice]?.[n] || 0, vel.per[codice]?.[n] || 0))}</div>` : '';
@@ -308,18 +394,18 @@ function renderPiano() {
     const f = stato.fragranze[t.codice]; const gM = g[t.codice]?.[t.da] || 0, gR = g[t.codice]?.[t.a] || 0;
     const resta = gM - t.ml; const min = sogliaDi(f);
     const avviso = t.ml > gM ? `<span class="badge esaurito">supera la giacenza di ${t.da}</span>` : resta < min ? `<span class="badge sotto">${t.da} scende sotto la minima (${min})</span>` : '';
-    return `<tr><td class="cod">${t.codice}</td><td>${esc(nomeF(t.codice)).replace(/^\d{3} /, '')}<div class="cop">${esc(f.categoria)}</div></td><td class="nowrap">${t.da} → ${t.a}</td><td class="num">${fmtMl(gM)}${cop(t.codice, t.da)}</td><td class="num"><span class="badge ${statoScorta(gR, min)}">${fmtMl(gR)}</span>${cop(t.codice, t.a)}</td><td class="num muted">${min} / ${obiettivoDi(f)}</td><td class="num"><input class="mini" type="number" min="10" step="10" inputmode="numeric" value="${t.ml}" data-spo-ml="${k}"></td><td class="num" data-resta="${k}">${fmtMl(resta)} <span class="muted">/ ${fmtMl(gR + t.ml)}</span></td><td data-avviso="${k}">${avviso}</td><td><button class="piccolo" data-spo-del="${k}" title="Togli dalla lista">✕</button></td></tr>`;
+    return `<tr><td class="cod">${t.codice}</td><td>${esc(nomeF(t.codice)).replace(/^\d{3} /, '')}<div class="cop">${esc(f.categoria)}</div></td><td class="nowrap">${t.da} → ${t.a}</td><td class="num">${fmtMl(gM)}${cop(t.codice, t.da)}</td><td class="num"><span class="badge ${statoScorta(gR, min)}">${fmtMl(gR)}</span>${cop(t.codice, t.a)}</td><td class="num muted">${min} / ${obiettivoDi(f)}</td><td class="num"><input class="mini" type="number" min="10" step="10" inputmode="numeric" value="${t.ml}" data-spo-ml="${k}"></td><td class="num" data-resta="${k}">${fmtMl(resta)} <span class="muted">/ ${fmtMl(gR + t.ml)}</span></td><td><input class="nota" value="${esc(t.note || '')}" placeholder="nota" data-spo-note="${k}"></td><td data-avviso="${k}">${avviso}</td><td><button class="piccolo" data-spo-del="${k}" title="Togli dalla lista">✕</button></td></tr>`;
   }).join('');
   const oggi = new Date().toLocaleDateString('it-IT');
   el.innerHTML = `
     <div class="card no-print"><h2>Piano</h2><p class="muted">Rifinisci le quantità, poi conferma. Le voci restano qui finché non le confermi o le togli.</p></div>
-    ${rio.length ? `<div class="card stampa-rio"><div class="cerca"><h2 style="margin:0;flex:1 1 auto">Lista riordino <span class="muted piccolo-testo">${oggi}</span></h2><div class="azioni no-print" style="margin:0"><button class="piccolo" data-piano="copia-rio">Copia testo</button><button class="piccolo" data-piano="csv-rio">Scarica CSV</button><button class="piccolo" data-piano="stampa">Stampa</button></div></div>
+    ${rio.length ? `<div class="card stampa-rio"><div class="cerca"><h2 style="margin:0;flex:1 1 auto">Lista riordino <span class="muted piccolo-testo">${oggi}</span></h2><div class="azioni no-print" style="margin:0"><button class="piccolo primario" data-piano="nuovo-rio">+ Aggiungi voce</button><button class="piccolo" data-piano="copia-rio">Copia testo</button><button class="piccolo" data-piano="csv-rio">Scarica CSV</button><button class="piccolo" data-piano="stampa">Stampa</button></div></div>
       <div class="tabella-wrap"><table><thead><tr><th>Codice</th><th>Referenza</th><th>Negozio</th><th class="num">Giacenza</th><th class="num">Min / Obiettivo</th><th class="num">Altro negozio</th><th>Fornitore</th><th class="num">Da ordinare</th><th class="num">Stima €</th><th>Nota</th><th class="no-print"></th></tr></thead><tbody>${righeRio}</tbody>
       <tfoot><tr><td colspan="7"><b>Totale</b> · ${rio.length} ${rio.length === 1 ? 'voce' : 'voci'}${Object.keys(perFornitore).length > 1 || !perFornitore['Fornitore non indicato'] ? `<div class="cop">${Object.entries(perFornitore).map(([f, ml]) => `${esc(f)}: ${fmtMl(ml)}`).join(' · ')}</div>` : ''}</td><td class="num"><b>${fmtMl(totMl)}</b></td><td class="num"><b>${conCosto ? euro(totEuro) : '–'}</b>${conCosto && conCosto < rio.length ? `<div class="cop">su ${conCosto} voci con costo</div>` : ''}</td><td colspan="2" class="no-print"></td></tr></tfoot></table></div>
       <p class="muted piccolo-testo">La stima usa il campo "Costo €/100 ml" della referenza, quando compilato.</p>
       <div class="azioni no-print"><button class="pericolo piccolo" data-piano="svuota-rio">Svuota lista</button><button class="primario" data-piano="conferma-rio">Conferma lista riordino</button></div></div>` : ''}
-    ${spo.length ? `<div class="card stampa-spo"><div class="cerca"><h2 style="margin:0;flex:1 1 auto">Trasferimenti tra negozi <span class="muted piccolo-testo">${oggi}</span></h2><div class="azioni no-print" style="margin:0"><button class="piccolo" data-piano="copia-spo">Copia testo</button><button class="piccolo" data-piano="stampa">Stampa</button></div></div>
-      <div class="tabella-wrap"><table><thead><tr><th>Codice</th><th>Referenza</th><th>Tratta</th><th class="num">Giacenza chi cede</th><th class="num">Giacenza chi riceve</th><th class="num">Min / Obiettivo</th><th class="num">ml da spostare</th><th class="num">Dopo: cede / riceve</th><th></th><th class="no-print"></th></tr></thead><tbody>${righeSpo}</tbody></table></div>
+    ${spo.length ? `<div class="card stampa-spo"><div class="cerca"><h2 style="margin:0;flex:1 1 auto">Trasferimenti tra negozi <span class="muted piccolo-testo">${oggi}</span></h2><div class="azioni no-print" style="margin:0"><button class="piccolo primario" data-piano="nuovo-spo">+ Aggiungi voce</button><button class="piccolo" data-piano="copia-spo">Copia testo</button><button class="piccolo" data-piano="stampa">Stampa</button></div></div>
+      <div class="tabella-wrap"><table><thead><tr><th>Codice</th><th>Referenza</th><th>Tratta</th><th class="num">Giacenza chi cede</th><th class="num">Giacenza chi riceve</th><th class="num">Min / Obiettivo</th><th class="num">ml da spostare</th><th class="num">Dopo: cede / riceve</th><th>Nota</th><th></th><th class="no-print"></th></tr></thead><tbody>${righeSpo}</tbody></table></div>
       <div class="azioni no-print"><button class="pericolo piccolo" data-piano="svuota-spo">Svuota lista</button><button class="primario" data-piano="crea-spo">Crea ${spo.length} ${spo.length === 1 ? 'trasferimento' : 'trasferimenti'}</button></div></div>` : ''}`;
   // modifiche quantità e note
   $$('[data-rio-ml]', el).forEach(i => i.onchange = () => { const v = Math.max(10, arr10(Number(i.value) || 0, true)); stato.piano.riordini[i.dataset.rioMl].ml = v; salvaPiano(); render(); });
@@ -329,13 +415,16 @@ function renderPiano() {
     i.oninput = () => { const t = stato.piano.spostamenti[i.dataset.spoMl]; const ml = Number(i.value) || 0; const gM = g[t.codice]?.[t.da] || 0, gR = g[t.codice]?.[t.a] || 0; $(`[data-resta="${i.dataset.spoMl}"]`).innerHTML = `${fmtMl(gM - ml)} <span class="muted">/ ${fmtMl(gR + ml)}</span>`; };
     i.onchange = () => { stato.piano.spostamenti[i.dataset.spoMl].ml = Math.max(10, arr10(Number(i.value) || 0, false)); salvaPiano(); render(); };
   });
+  $$('[data-spo-note]', el).forEach(i => i.onchange = () => { stato.piano.spostamenti[i.dataset.spoNote].note = i.value; salvaPiano(); });
   $$('[data-spo-del]', el).forEach(b => b.onclick = () => { delete stato.piano.spostamenti[b.dataset.spoDel]; salvaPiano(); render(); });
   // azioni
   const testoRio = () => [`LISTA RIORDINO ${oggi}`, ...rio.map(([, r]) => { const f = stato.fragranze[r.codice]; return `${r.codice}  ${f.brand ? f.brand + ' - ' : ''}${f.nome}  |  ${r.negozio}  |  giacenza ${g[r.codice]?.[r.negozio] || 0} ml  |  ordinare ${r.ml} ml${f.fornitore ? '  |  ' + f.fornitore : ''}${r.note ? '  |  ' + r.note : ''}`; }), `Totale: ${totMl} ml`].join('\n');
-  const testoSpo = () => [`TRASFERIMENTI ${oggi}`, ...spo.map(([, t]) => { const f = stato.fragranze[t.codice]; return `${t.codice}  ${f.brand ? f.brand + ' - ' : ''}${f.nome}  |  ${t.ml} ml da ${t.da} a ${t.a}  |  ${t.da} resta con ${(g[t.codice]?.[t.da] || 0) - t.ml} ml`; })].join('\n');
+  const testoSpo = () => [`TRASFERIMENTI ${oggi}`, ...spo.map(([, t]) => { const f = stato.fragranze[t.codice]; return `${t.codice}  ${f.brand ? f.brand + ' - ' : ''}${f.nome}  |  ${t.ml} ml da ${t.da} a ${t.a}  |  ${t.da} resta con ${(g[t.codice]?.[t.da] || 0) - t.ml} ml${t.note ? '  |  ' + t.note : ''}`; })].join('\n');
   const copia = async testo => { try { await navigator.clipboard.writeText(testo); toast('Copiato negli appunti.'); } catch { toast('Copia non riuscita: usa Stampa o Scarica CSV.'); } };
   $$('[data-piano]', el).forEach(b => b.onclick = async () => {
     const a = b.dataset.piano;
+    if (a === 'nuovo-rio') return dialogPiano({ tipo: 'riordino' });
+    if (a === 'nuovo-spo') return dialogPiano({ tipo: 'spostamento' });
     if (a === 'copia-rio') return copia(testoRio());
     if (a === 'copia-spo') return copia(testoSpo());
     if (a === 'stampa') return window.print();
@@ -355,7 +444,7 @@ function renderPiano() {
       const errati = spo.filter(([, t]) => t.ml > (g[t.codice]?.[t.da] || 0));
       if (errati.length) { toast(`${errati.length} ${errati.length === 1 ? 'voce supera' : 'voci superano'} la giacenza di chi cede: correggi i ml.`); return; }
       if (!await conferma('Creare i trasferimenti?', `${spo.length} trasferimenti in stato "proposto". Chi spedisce e chi riceve li confermeranno nella scheda Trasferimenti.`, 'Crea')) return;
-      for (const [, t] of spo) stato.trasferimenti.push({ id: nId(), ts: adesso(), da: t.da, a: t.a, codice: t.codice, ml: t.ml, note: 'dal piano', stato: 'proposto', storia: [{ stato: 'proposto', ts: adesso() }] });
+      for (const [, t] of spo) stato.trasferimenti.push({ id: nId(), ts: adesso(), da: t.da, a: t.a, codice: t.codice, ml: t.ml, note: t.note || 'dal piano', stato: 'proposto', storia: [{ stato: 'proposto', ts: adesso() }] });
       stato.piano.spostamenti = {}; salva('trasferimenti dal piano'); toast(`${spo.length} trasferimenti proposti.`); tab = 'trasferimenti'; render();
     }
   });

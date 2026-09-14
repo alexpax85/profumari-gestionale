@@ -47,7 +47,9 @@ l'app non ha dipendenze esterne e funziona anche offline.
 - Proposte di trasferimento (scheda Giacenze, pannello "Da riordinare o spostare"), a un tocco con annulla:
   - regola base: riporta il negozio in difficoltà alla scorta obiettivo, prelevando solo l'eccedenza sopra la minima dell'altro negozio;
   - con almeno 4 settimane di vendite caricate (`SETTIMANE_MIN` in `app.js`) la proposta equilibra la **copertura** (settimane di vendita davanti) tra i due negozi, con lo stesso limite; la copertura compare anche sotto ogni giacenza;
+  - nessuna proposta porta chi riceve oltre `ORIZZONTE_SETT` (8) settimane di copertura, così chi cede non viene svuotato;
   - sotto i 50 ml non si propone nulla e la riga dice "da riordinare" con il motivo.
+- **Fuori soglia**: dalla tabella giacenze, il pulsante *Ordina o sposta* su ogni riga (e *+ Aggiungi voce* nel Piano) apre una finestra per mettere a piano un riordino o uno spostamento di qualsiasi referenza, anche non sotto scorta, con giacenze, copertura, quantità suggerita e avviso sull'effetto dello spostamento.
 - Trasferimento in tre passi: *proposto → spedito* (ml in transito) *→ ricevuto*.
 - **Giacenze**: i numeri in testata aprono viste filtrate; la tabella ha categoria, filtri (categoria, negozio, stato) e ordinamento per colonna.
 - **Piano**: dal pannello "Da riordinare o spostare" si spuntano *Riordina* e/o *Sposta* per ogni voce; la scheda Piano mostra la lista riordino (quantità e note modificabili, stima costo da "€/100 ml", copia testo, CSV, stampa, conferma → salvata in Storico) e la lista trasferimenti (ml modificabili con giacenze prima/dopo e avvisi, creazione in blocco dei trasferimenti in stato "proposto"). Le spunte sono salvate e restano finché non si conferma o si toglie la voce.
