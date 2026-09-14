@@ -15,6 +15,7 @@ let filtro = { testo: '', negozio: null, categoria: null, stato: null, sort: 'co
 let pannelloAperto = false;   // apertura del pannello "Da riordinare o spostare", scelta dall'utente
 let anteprimaVendite = null;   // risultato analisi CSV in attesa di conferma
 let anteprimaGiacenze = null;  // risultato analisi Excel in attesa di conferma
+let ricezione = null;          // id dell'ordine di cui si sta registrando la consegna
 
 // ---------- utilità ----------
 const $ = (s, r = document) => r.querySelector(s);
@@ -197,14 +198,64 @@ function testoOrdine(o) {
 async function copiaTesto(testo) { try { await navigator.clipboard.writeText(testo); toast('Copiato negli appunti.'); } catch { toast('Copia non riuscita: usa Excel o Stampa.'); } }
 function dialogOrdine(o) {
   const d = $('#dlg');
-  d.innerHTML = `<h2>Ordine ${esc(nomeFornitore(o.fornitore))} · ${esc(o.negozio)}</h2><p class="muted">${fmtData(o.ts)} · ${o.righe.length} voci · ${fmtMl(o.righe.reduce((a, r) => a + r.ml, 0))}</p>
-    <div class="tabella-wrap"><table><thead><tr><th>Cod. ${esc(o.fornitore || 'forn.')}</th><th>Codice</th><th>Prodotto</th><th class="num">ml</th><th>Nota</th></tr></thead><tbody>${o.righe.map(r => `<tr><td class="cod">${esc(r.codiceFornitore)}</td><td>${r.codice}</td><td>${esc(r.nome)}</td><td class="num"><b>${r.ml}</b></td><td>${esc(r.note)}</td></tr>`).join('')}</tbody></table></div>
+  d.innerHTML = `<h2>Ordine ${esc(nomeFornitore(o.fornitore))} · ${esc(o.negozio)}</h2><p class="muted">${fmtData(o.ts)} · ${o.righe.length} voci · ${fmtMl(o.righe.reduce((a, r) => a + r.ml, 0))} · ${badgeOrdine(o)}</p>
+    <div class="tabella-wrap"><table><thead><tr><th>Cod. ${esc(o.fornitore || 'forn.')}</th><th>Codice</th><th>Prodotto</th><th class="num">Ordinati</th><th>Consegna</th><th>Nota</th></tr></thead><tbody>${o.righe.map(r => `<tr><td class="cod">${esc(r.codiceFornitore)}</td><td>${r.codice}</td><td>${esc(r.nome)}</td><td class="num"><b>${r.ml}</b></td><td>${r.annullata ? '<span class="badge grigio">annullata</span>' : r.ricevutoMl != null ? `<span class="badge ${r.ricevutoMl === r.ml ? 'ok' : 'sotto'}">ricevuti ${r.ricevutoMl}</span>` : '<span class="badge neutro">in attesa</span>'}</td><td>${esc(r.note)}</td></tr>`).join('')}</tbody></table></div>
     <div class="azioni"><button id="ord-excel">Excel</button><button id="ord-stampa">Stampa / PDF</button><button id="ord-copia">Copia testo</button><button id="ord-chiudi" class="primario">Chiudi</button></div>`;
   $('#ord-chiudi').onclick = () => d.close();
   $('#ord-excel').onclick = () => excelOrdine(o);
   $('#ord-stampa').onclick = () => { d.close(); stampaOrdine(o); };
   $('#ord-copia').onclick = () => copiaTesto(testoOrdine(o));
   d.showModal();
+}
+
+// ---------- ricezione ordini ----------
+function righePendenti(o) { return o.righe.filter(r => r.ricevutoMl == null && !r.annullata); }
+function statoOrdine(o) {
+  const pend = righePendenti(o).length, ric = o.righe.filter(r => r.ricevutoMl != null).length;
+  if (!pend) return ric ? 'ricevuto' : 'annullato';
+  return ric || o.righe.some(r => r.annullata) ? 'parziale' : 'in attesa';
+}
+function badgeOrdine(o) { const s = statoOrdine(o); return `<span class="badge ${s === 'ricevuto' ? 'ok' : s === 'in attesa' ? 'neutro' : s === 'parziale' ? 'sotto' : 'grigio'}">${s}</span>`; }
+/** Scheda di ricezione di un ordine: una riga per voce con stato e ml ricevuti, poi carico a magazzino. */
+function cardRicezione(o, g) {
+  const pend = righePendenti(o), fatte = o.righe.filter(r => r.ricevutoMl != null || r.annullata);
+  const riga = (r, i) => `<tr><td class="cod">${esc(r.codiceFornitore) || '<span class="muted">–</span>'}</td><td>${r.codice} ${esc(r.nome)}${r.note ? `<div class="cop">${esc(r.note)}</div>` : ''}</td><td class="num">${fmtMl(g[r.codice]?.[o.negozio] || 0)}</td><td class="num">${r.ml}</td>
+    <td><select class="mini-sel" data-ric-stato="${i}"><option value="ok">Ricevuto</option><option value="attesa">Non arrivato, resta in attesa</option><option value="annulla">Non arriverà, annulla</option></select></td>
+    <td class="num"><input class="mini" type="number" min="0" step="10" inputmode="numeric" value="${r.ml}" data-ric-ml="${i}"></td></tr>`;
+  return `<div class="card info" id="ricezione"><h2>Consegna ordine ${esc(nomeFornitore(o.fornitore))} · ${esc(o.negozio)} <span class="muted piccolo-testo">del ${fmtData(o.ts)}</span></h2>
+    <p class="muted">Per ogni voce: lascia <b>Ricevuto</b> con la quantità ordinata se è tutto a posto, correggi i ml se il fornitore ha mandato una quantità diversa, oppure segna la voce come non arrivata (resta in attesa) o annullata. Al carico i ml ricevuti entrano nella giacenza di <b>${esc(o.negozio)}</b>.</p>
+    <div class="azioni" style="margin:0 0 10px"><button class="piccolo" data-ric-tutti="ok">Tutto ricevuto come ordinato</button><button class="piccolo" data-ric-tutti="attesa">Niente arrivato</button></div>
+    <div class="tabella-wrap"><table><thead><tr><th>Cod. ${esc(o.fornitore || 'forn.')}</th><th>Prodotto</th><th class="num">Giacenza ora</th><th class="num">Ordinati</th><th>Esito</th><th class="num">Ricevuti ml</th></tr></thead><tbody>${o.righe.map((r, i) => r.ricevutoMl == null && !r.annullata ? riga(r, i) : '').join('')}</tbody></table></div>
+    ${fatte.length ? `<details style="margin-top:10px"><summary>Voci già chiuse (${fatte.length})</summary><ul class="pulita piccolo-testo">${fatte.map(r => `<li>${r.codice} ${esc(r.nome)} · ordinati ${r.ml} ml · ${r.annullata ? '<span class="badge grigio">annullata</span>' : `<span class="badge ok">ricevuti ${r.ricevutoMl} ml</span> il ${fmtData(r.ricevutoTs)}`}</li>`).join('')}</ul></details>` : ''}
+    <p id="ric-riepilogo" class="piccolo-testo" style="margin:10px 0 0"></p>
+    <div class="azioni"><button id="ric-annulla">Chiudi senza caricare</button><button id="ric-conferma" class="primario">Carica a magazzino</button></div></div>`;
+}
+function collegaRicezione(o, el) {
+  const box = $('#ricezione', el); if (!box) return;
+  const leggi = () => $$('[data-ric-stato]', box).map(s => { const i = Number(s.dataset.ricStato); const ml = Number($(`[data-ric-ml="${i}"]`, box).value) || 0; return { i, esito: s.value, ml }; });
+  const riepilogo = () => {
+    const v = leggi(); const ok = v.filter(x => x.esito === 'ok'); const tot = ok.reduce((a, x) => a + x.ml, 0);
+    $('#ric-riepilogo').innerHTML = `Da caricare a ${esc(o.negozio)}: <b>${ok.length}</b> voci per <b>${fmtMl(tot)}</b>${v.some(x => x.esito === 'attesa') ? ` · ${v.filter(x => x.esito === 'attesa').length} restano in attesa` : ''}${v.some(x => x.esito === 'annulla') ? ` · ${v.filter(x => x.esito === 'annulla').length} annullate` : ''}.`;
+    $$('[data-ric-ml]', box).forEach(i => { i.disabled = $(`[data-ric-stato="${i.dataset.ricMl}"]`, box).value !== 'ok'; });
+  };
+  $$('[data-ric-stato], [data-ric-ml]', box).forEach(x => { x.onchange = riepilogo; x.oninput = riepilogo; });
+  $$('[data-ric-tutti]', box).forEach(b => b.onclick = () => { $$('[data-ric-stato]', box).forEach(s => { s.value = b.dataset.ricTutti; }); riepilogo(); });
+  $('#ric-annulla').onclick = () => { ricezione = null; render(); };
+  $('#ric-conferma').onclick = async () => {
+    const v = leggi(); const ok = v.filter(x => x.esito === 'ok' && x.ml > 0);
+    const tot = ok.reduce((a, x) => a + x.ml, 0);
+    if (!ok.length && !v.some(x => x.esito === 'annulla')) { toast('Nessuna voce ricevuta o annullata.'); return; }
+    if (!await conferma('Registrare la consegna?', `<b>${ok.length}</b> voci per <b>${fmtMl(tot)}</b> entrano in giacenza a <b>${esc(o.negozio)}</b>.${v.some(x => x.esito === 'attesa') ? `<br>${v.filter(x => x.esito === 'attesa').length} voci restano in attesa di una prossima consegna.` : ''}${v.some(x => x.esito === 'annulla') ? `<br>${v.filter(x => x.esito === 'annulla').length} voci vengono annullate.` : ''}`, 'Carica')) return;
+    const ts = adesso();
+    for (const x of v) {
+      const r = o.righe[x.i];
+      if (x.esito === 'ok' && x.ml > 0) { r.ricevutoMl = x.ml; r.ricevutoTs = ts; aggiungiMovimento({ dataEvento: ts, negozio: o.negozio, codice: r.codice, tipo: 'carico', ml: x.ml, rif: o.id, note: `Ordine ${nomeFornitore(o.fornitore)} del ${fmtData(o.ts).slice(0, 10)}${x.ml !== r.ml ? ` (ordinati ${r.ml})` : ''}` }); }
+      else if (x.esito === 'annulla') { r.annullata = true; r.ricevutoTs = ts; }
+    }
+    ricezione = null; salva(`consegna ordine ${o.fornitore} ${o.negozio}`);
+    toast(`Caricati ${fmtMl(tot)} a ${o.negozio} (${ok.length} voci). Ordine: ${statoOrdine(o)}.`); render();
+  };
+  riepilogo();
 }
 
 // ---------- render ----------
@@ -509,7 +560,7 @@ function renderPiano() {
     if (a === 'stampa') return stampaOrdine(o);
     if (a === 'conferma') {
       const manca = o.righe.filter(r => !r.codiceFornitore).length;
-      if (!await conferma('Confermare l\'ordine?', `<b>${esc(nomeFornitore(o.fornitore))}</b>, consegna a <b>${esc(o.negozio)}</b>: ${o.righe.length} voci per ${fmtMl(o.righe.reduce((s, r) => s + r.ml, 0))}.${manca ? `<br><span class="badge sotto">${manca} ${manca === 1 ? 'voce senza codice' : 'voci senza codice'} ${esc(o.fornitore)}</span>` : ''}<br>L'ordine viene salvato in Storico (da lì puoi riscaricare Excel o PDF) e le voci tolte dal piano. Quando la merce arriva, registrala in <b>Carichi</b>.`, 'Conferma')) return;
+      if (!await conferma('Confermare l\'ordine?', `<b>${esc(nomeFornitore(o.fornitore))}</b>, consegna a <b>${esc(o.negozio)}</b>: ${o.righe.length} voci per ${fmtMl(o.righe.reduce((s, r) => s + r.ml, 0))}.${manca ? `<br><span class="badge sotto">${manca} ${manca === 1 ? 'voce senza codice' : 'voci senza codice'} ${esc(o.fornitore)}</span>` : ''}<br>L'ordine viene salvato e le voci tolte dal piano. Lo ritrovi in <b>Carichi</b> → "Ordini in attesa di consegna": all'arrivo della merce lo spunti voce per voce e le quantità entrano in giacenza.`, 'Conferma')) return;
       o.totMl = o.righe.reduce((s, r) => s + r.ml, 0);
       stato.ordini.push(o);
       for (const [k] of gr.voci) delete stato.piano.riordini[k];
@@ -663,6 +714,10 @@ function renderMovimenti() {
   const g = giacenze();
   const opzioni = fragranzeOrdinate().map(f => `<option value="${f.codice}">${esc(nomeF(f.codice))}</option>`).join('');
   const recenti = movimentiValidi().filter(m => ['carico', 'rettifica', 'inventario'].includes(m.tipo)).slice().reverse().slice(0, 20);
+  const aperti = stato.ordini.filter(o => righePendenti(o).length).slice().reverse();
+  const inRicezione = ricezione ? stato.ordini.find(o => o.id === ricezione) : null;
+  const ordiniHtml = inRicezione ? cardRicezione(inRicezione, g) : `<div class="card"><h2>Ordini in attesa di consegna${aperti.length ? ` (${aperti.length})` : ''}</h2>
+      ${aperti.length ? `<p class="muted">Quando arriva la merce, registra la consegna: le quantità ricevute entrano in giacenza nel negozio di consegna senza doverle ricaricare a mano.</p><div class="tabella-wrap"><table><thead><tr><th>Ordine</th><th>Fornitore</th><th>Consegna</th><th class="num">Voci in attesa</th><th class="num">ml in attesa</th><th>Stato</th><th></th></tr></thead><tbody>${aperti.map(o => { const p = righePendenti(o); return `<tr><td>${fmtData(o.ts)}</td><td>${esc(nomeFornitore(o.fornitore))}</td><td>${esc(o.negozio)}</td><td class="num">${p.length} / ${o.righe.length}</td><td class="num">${fmtMl(p.reduce((a, r) => a + r.ml, 0))}</td><td>${badgeOrdine(o)}</td><td class="azioni" style="margin:0"><button class="piccolo primario" data-ricevi="${o.id}">Registra consegna</button><button class="piccolo" data-ordine="${o.id}">Vedi</button></td></tr>`; }).join('')}</tbody></table></div>` : '<p class="muted">Nessun ordine in attesa. Gli ordini si creano dal Piano; una volta confermati compaiono qui finché la merce non è arrivata.</p>'}</div>`;
   let ant = '';
   if (anteprimaGiacenze) {
     const a = anteprimaGiacenze;
@@ -678,6 +733,7 @@ function renderMovimenti() {
   }
   el.innerHTML = `
     ${ant}
+    ${ordiniHtml}
     <div class="card"><h2>Carico o rettifica manuale</h2>
       <p class="muted">Usa <b>Carico</b> quando arriva merce dal fornitore (ml aggiunti). Usa <b>Rettifica</b> dopo un conteggio: inserisci i ml effettivamente presenti e la differenza viene registrata.</p>
       <form id="form-mov" class="riga">
@@ -692,6 +748,9 @@ function renderMovimenti() {
       <p class="muted">Per il caricamento iniziale (o per un inventario completo): esporta l'elenco dal vecchio programma di magazzino (colonne <i>Nome</i> e <i>Quantità</i>) in .xlsx o .csv e scegli il negozio a cui si riferisce. Le quantità sono in ml. Se il negozio ha già giacenze, ogni referenza viene portata al valore dell'inventario con una rettifica.</p>
       <div class="riga"><label class="campo">Negozio<select id="g-negozio">${NEGOZI.map(n => `<option>${n}</option>`).join('')}</select></label><label class="campo" style="flex:2 1 260px">File inventario<input type="file" id="file-giacenze" accept=".xlsx,.xls,.csv"></label></div></div>
     <div class="card"><h3>Ultimi carichi e rettifiche</h3>${recenti.length ? `<div class="tabella-wrap"><table><thead><tr><th>Quando</th><th>Negozio</th><th>Referenza</th><th>Tipo</th><th class="num">ml</th><th>Nota</th></tr></thead><tbody>${recenti.map(m => `<tr><td>${fmtData(m.ts)}</td><td>${m.negozio}</td><td>${esc(nomeF(m.codice))}</td><td>${m.tipo}</td><td class="num">${m.ml > 0 ? '+' : ''}${m.ml}</td><td class="muted">${esc(m.note || '')}</td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">Nessuno.</p>'}</div>`;
+  $$('[data-ricevi]', el).forEach(b => b.onclick = () => { ricezione = b.dataset.ricevi; render(); $('#ricezione')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); });
+  $$('[data-ordine]', el).forEach(b => b.onclick = () => dialogOrdine(stato.ordini.find(x => x.id === b.dataset.ordine)));
+  if (inRicezione) collegaRicezione(inRicezione, el);
   const form = $('#form-mov');
   const aggDisp = () => { const c = form.codice.value; $('#mov-disp').textContent = c ? `Giacenza attuale di ${c} a ${form.negozio.value}: ${fmtMl(g[c]?.[form.negozio.value] || 0)}` : ''; };
   form.codice.onchange = aggDisp; form.negozio.onchange = aggDisp;
@@ -832,7 +891,7 @@ function renderStorico() {
     <div class="card"><h2>Backup</h2><p class="muted">I dati vivono in questo browser/tablet. Scarica un backup ogni tanto (e prima di operazioni delicate); da un backup puoi ripristinare tutto, anche su un altro dispositivo.</p>
       <div class="azioni"><button id="bk-esporta" class="primario">Scarica backup</button><label class="btn" style="display:inline-flex;align-items:center">Ripristina da backup <input type="file" id="bk-importa" accept=".json" style="display:none"></label><button id="bk-azzera" class="pericolo">Azzera tutti i dati</button></div>
       ${snaps.length ? `<details style="margin-top:12px"><summary>Punti di ripristino automatici (${snaps.length})</summary><p class="muted piccolo-testo">Prima di ogni salvataggio viene conservata una copia dello stato precedente. Utile per tornare indietro dopo un errore.</p><ul class="pulita">${snaps.map((s, i) => `<li>${fmtData(s.ts)} · prima di: <b>${esc(s.etichetta || '-')}</b> <button class="piccolo" data-snap="${i}" style="float:right">Ripristina</button></li>`).join('')}</ul></details>` : ''}</div>
-    ${stato.ordini.length ? `<div class="card"><h2>Ordini confermati (${stato.ordini.length})</h2><p class="muted piccolo-testo">Da qui puoi riscaricare Excel o PDF di ogni ordine.</p><div class="tabella-wrap"><table><thead><tr><th>Quando</th><th>Fornitore</th><th>Consegna</th><th class="num">Voci</th><th class="num">Totale</th><th></th></tr></thead><tbody>${stato.ordini.slice().reverse().map(o => `<tr><td>${fmtData(o.ts)}</td><td>${esc(nomeFornitore(o.fornitore) || '–')}</td><td>${esc(o.negozio || '–')}</td><td class="num">${o.righe.length}</td><td class="num">${fmtMl(o.totMl)}</td><td class="azioni" style="margin:0"><button class="piccolo" data-ordine="${o.id}">Vedi</button><button class="piccolo" data-ordine-excel="${o.id}">Excel</button><button class="piccolo" data-ordine-stampa="${o.id}">PDF</button></td></tr>`).join('')}</tbody></table></div></div>` : ''}
+    ${stato.ordini.length ? `<div class="card"><h2>Ordini confermati (${stato.ordini.length})</h2><p class="muted piccolo-testo">Da qui puoi riscaricare Excel o PDF di ogni ordine.</p><div class="tabella-wrap"><table><thead><tr><th>Quando</th><th>Fornitore</th><th>Consegna</th><th class="num">Voci</th><th class="num">Totale</th><th>Stato</th><th></th></tr></thead><tbody>${stato.ordini.slice().reverse().map(o => `<tr><td>${fmtData(o.ts)}</td><td>${esc(nomeFornitore(o.fornitore) || '–')}</td><td>${esc(o.negozio || '–')}</td><td class="num">${o.righe.length}</td><td class="num">${fmtMl(o.totMl)}</td><td>${badgeOrdine(o)}</td><td class="azioni" style="margin:0"><button class="piccolo" data-ordine="${o.id}">Vedi</button><button class="piccolo" data-ordine-excel="${o.id}">Excel</button><button class="piccolo" data-ordine-stampa="${o.id}">PDF</button></td></tr>`).join('')}</tbody></table></div></div>` : ''}
     <div class="card"><h2>Caricamenti (${lotti.length})</h2><p class="muted">Un caricamento sbagliato si annulla in blocco: tutte le sue righe smettono di contare e il file può essere ricaricato.</p>
       ${lotti.length ? `<div class="tabella-wrap"><table><thead><tr><th>Quando</th><th>Tipo</th><th>File</th><th>Negozio</th><th class="num">Righe</th><th></th></tr></thead><tbody>${lotti.map(l => `<tr><td>${fmtData(l.ts)}</td><td>${l.tipo}</td><td>${esc(l.file)}</td><td>${l.negozio || 'entrambi'}</td><td class="num">${l.righe}</td><td>${l.annullato ? '<span class="badge grigio">annullato</span>' : `<button class="piccolo pericolo" data-annulla-lotto="${l.id}">Annulla</button>`}</td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">Nessuno.</p>'}</div>
     <div class="card"><div class="cerca"><h2 style="margin:0;flex:1 1 auto">Movimenti (${mv.length})</h2><input type="search" id="cerca-sto" placeholder="Filtra per codice, negozio, tipo…" value="${esc(filtro.testoSto || '')}"></div>
