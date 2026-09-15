@@ -215,32 +215,55 @@ function excelOrdine(o) {
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Ordine');
   XLSX.writeFile(wb, nomeFileOrdine(o, 'xlsx'));
 }
+/** Logo per il PDF: l'SVG (bianco su fondo scuro) diventa un PNG nero, con l'accento verde intatto. */
+let logoPdf = null;
+async function logoPerPdf() {
+  if (logoPdf !== null) return logoPdf;
+  try {
+    const img = new Image(); img.src = 'logo.svg'; await img.decode();
+    const c = document.createElement('canvas'); c.width = 1714; c.height = 460;
+    const ctx = c.getContext('2d'); ctx.drawImage(img, 0, 0, c.width, c.height);
+    const id = ctx.getImageData(0, 0, c.width, c.height), px = id.data;
+    for (let i = 0; i < px.length; i += 4) { if (px[i + 3] && px[i] > 180 && px[i + 1] > 180 && px[i + 2] > 180) { px[i] = px[i + 1] = px[i + 2] = 0; } }
+    ctx.putImageData(id, 0, 0);
+    logoPdf = c.toDataURL('image/png');
+  } catch (e) { console.warn('logo pdf', e); logoPdf = ''; }
+  return logoPdf;
+}
 /** Crea il PDF dell'ordine e lo condivide (iPad: foglio di condivisione, Mail, WhatsApp) o lo scarica (computer). */
 async function pdfOrdine(o) {
   const J = window.jspdf?.jsPDF; if (!J) { toast('Libreria PDF non disponibile.'); return; }
   const h = intestazioneOrdine(o);
+  const logo = await logoPerPdf();
   const d = new J({ unit: 'mm', format: 'a4' });
-  const W = 210, M = 16, xQta = M + 92, xNote = M + 100; let y = 20;
-  d.setFont('helvetica', 'normal'); d.setFontSize(22); d.setTextColor(0); d.text('i profumari', M, y);
-  d.setFontSize(10); d.setTextColor(90); d.text('ORDINE DI ACQUISTO', W - M, y, { align: 'right' }); y += 6;
-  d.setDrawColor(0); d.setLineWidth(.6); d.line(M, y, W - M, y); y += 9;
+  const W = 210, M = 16, xQta = M + 92, xNote = M + 100, FONDO = 278, RIGA = 5;
+  let y = 16;
+  // intestazione: logo (o nome) a sinistra, titolo a destra, filo nero sotto
+  if (logo) d.addImage(logo, 'PNG', M, y, 46, 46 * 230 / 857);
+  else { d.setFont('helvetica', 'normal'); d.setFontSize(22); d.setTextColor(0); d.text('i profumari', M, y + 10); }
+  d.setFont('helvetica', 'normal'); d.setFontSize(10); d.setTextColor(90); d.text('ORDINE DI ACQUISTO', W - M, y + 9, { align: 'right' });
+  y += 17; d.setDrawColor(0); d.setLineWidth(.6); d.line(M, y, W - M, y); y += 10;
   d.setFontSize(11); d.setTextColor(0);
   for (const riga of [`Fornitore: ${h.fornitore}`, `Consegna presso: ${h.consegna}`, `Data: ${h.data}`]) { d.text(riga, M, y); y += 6; }
-  y += 5;
-  const testata = () => { d.setFontSize(9); d.setTextColor(90); d.text(h.colonnaCodice.toUpperCase(), M, y); d.text('QUANTITÀ', xQta, y, { align: 'right' }); d.text('NOTE', xNote, y); y += 2; d.setDrawColor(120); d.setLineWidth(.3); d.line(M, y, W - M, y); y += 6; d.setTextColor(0); };
+  y += 6;
+  // tabella: ogni voce ha la base del testo a y, un filo grigio 3 mm sotto l'ultima riga, poi 6 mm d'aria
+  const testata = () => { d.setFont('helvetica', 'normal'); d.setFontSize(9); d.setTextColor(90); d.text(h.colonnaCodice.toUpperCase(), M, y); d.text('QUANTITÀ', xQta, y, { align: 'right' }); d.text('NOTE', xNote, y); d.setDrawColor(120); d.setLineWidth(.4); d.line(M, y + 2.5, W - M, y + 2.5); y += 10; d.setTextColor(0); };
   testata();
   for (const r of righeFornitore(o)) {
-    const note = d.splitTextToSize(r.manca ? `MANCA IL CODICE: ${r.descr}${r.note ? ' · ' + r.note : ''}` : r.note, W - M - xNote);
-    const alt = Math.max(1, note.length) * 5 + 3;
-    if (y + alt > 282) { d.addPage(); y = 20; testata(); }
+    const note = d.splitTextToSize(r.manca ? `MANCA IL CODICE: ${r.descr}${r.note ? ' · ' + r.note : ''}` : r.note, W - M - xNote).filter(Boolean);
+    const n = Math.max(1, note.length);
+    if (y + (n - 1) * RIGA + 3 > FONDO) { d.addPage(); y = 16; testata(); }
     d.setFontSize(12); d.setFont('helvetica', 'bold');
     if (r.manca) d.setTextColor(179, 38, 30);
     d.text(r.manca ? '—' : r.codice, M, y);
     d.setTextColor(0); d.setFont('helvetica', 'normal'); d.text(`${r.ml} ml`, xQta, y, { align: 'right' });
-    d.setFontSize(10); if (note.length && note[0]) d.text(note, xNote, y);
-    y += alt; d.setDrawColor(200); d.line(M, y - 2, W - M, y - 2);
+    d.setFontSize(10); if (note.length) d.text(note, xNote, y, { lineHeightFactor: 1.35 });
+    const fondoVoce = y + (n - 1) * RIGA + 3;
+    d.setDrawColor(210); d.setLineWidth(.25); d.line(M, fondoVoce, W - M, fondoVoce);
+    y = fondoVoce + 7;
   }
-  y += 3; if (y > 282) { d.addPage(); y = 20; }
+  if (y > FONDO) { d.addPage(); y = 16; }
+  d.setDrawColor(0); d.setLineWidth(.6); d.line(M, y - 4, W - M, y - 4); y += 2;
   d.setFontSize(11); d.setFont('helvetica', 'bold'); d.text(`Totale · ${o.righe.length} ${o.righe.length === 1 ? 'voce' : 'voci'}`, M, y); d.text(`${h.totale} ml`, xQta, y, { align: 'right' }); d.setFont('helvetica', 'normal');
   const nome = nomeFileOrdine(o, 'pdf');
   const blob = d.output('blob');
