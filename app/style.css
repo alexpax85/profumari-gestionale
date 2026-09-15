@@ -192,9 +192,11 @@ select.mini-sel { min-height: 38px; padding: 4px 8px; font-size: .9rem; width: a
 fieldset.forn { border: 1px solid var(--line); border-radius: 6px; padding: 10px 14px 14px; margin: 12px 0; display: flex; flex-wrap: wrap; gap: 12px; }
 fieldset.forn legend { font-size: .78rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); padding: 0 6px; }
 fieldset.forn label.campo { flex: 1 1 140px; }
-fieldset.forn .riga-forn { flex: 1 1 100%; display: flex; gap: 12px; }
-fieldset.forn .riga-forn label.campo:first-child { flex: 2 1 160px; }
-fieldset.forn .riga-forn label.campo:last-child { flex: 1 1 110px; }
+fieldset.forn .tab-forn { flex: 1 1 100%; display: grid; grid-template-columns: minmax(96px, 1.1fr) 1fr 1fr; gap: 8px 12px; align-items: center; }
+fieldset.forn .tab-forn .int { font-size: .78rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); align-self: end; line-height: 1.2; }
+fieldset.forn .tab-forn .nome b { display: block; font-size: 1rem; }
+fieldset.forn .tab-forn .nome span { display: block; font-size: .82rem; color: var(--muted); line-height: 1.2; }
+fieldset.forn .tab-forn input { min-height: 42px; }
 #stampa .stampa-azioni { margin: 0 0 20px; align-items: center; }
 #stampa .stampa-azioni .piccolo-testo { flex: 1 1 200px; }
 ol.istruzioni { padding-left: 22px; margin: 8px 0; } ol.istruzioni li { margin: 6px 0; }
