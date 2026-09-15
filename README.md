@@ -11,7 +11,8 @@ Sull'iPad: aprire il link in Safari, Condividi → "Aggiungi alla schermata Home
 ## Organizzazione della repo
 
 - `main`: versione demo, pubblicata su Pages. I dati vivono nel browser del dispositivo.
-- La versione definitiva (sincronizzazione tra i tablet con Firebase, accessi) si sviluppa su un ramo dedicato e si unisce a `main` solo quando pronta.
+- `produzione`: versione condivisa tra i tablet (Firebase), pubblicata su Firebase Hosting dal workflow `.github/workflows/produzione.yml`. Vedi la sezione **Produzione**.
+- La stessa app funziona in entrambe le modalità: con `FIREBASE_CONFIG` vuota in `app/js/config.js` (o su GitHub Pages, o con `?demo` nell'indirizzo) resta locale; altrimenti chiede l'accesso e lavora sui dati condivisi.
 - I file grezzi del cliente (Excel inventario, CSV vendite) non sono nella repo: vedi `.gitignore`.
 
 ## Avvio locale
@@ -29,12 +30,59 @@ l'app non ha dipendenze esterne e funziona anche offline.
 
 - `app/` — l'applicazione (HTML/CSS/JS senza build, pubblicabile su qualsiasi hosting statico)
   - `js/normalizza.js` — logica condivisa: normalizzazione anagrafica dall'Excel, parser CSV vendite, categoria da codice
-  - `js/store.js` — persistenza (oggi localStorage + punti di ripristino; interfaccia pronta per Firebase)
-  - `js/app.js` — schermate e regole (giacenze, import, trasferimenti, soglie, storico)
+  - `js/store.js` — persistenza locale (localStorage + punti di ripristino) e scomposizione dello stato in collezioni per la versione condivisa
+  - `js/store-firebase.js` — persistenza condivisa: accessi, ruoli, ascolto in tempo reale, salvataggio per differenze, cache offline
+  - `js/config.js` — configurazione Firebase (vuota = modalità locale) e dominio degli accessi
+  - `js/app.js` — schermate e regole (giacenze, import, trasferimenti, soglie, storico), schermata di accesso, permessi per ruolo
+  - `sw.js` — service worker: l'app si apre anche senza rete
+  - `lib/firebase/` — SDK Firebase (app, auth, firestore) incluso nella repo, così non servono CDN
+- `firestore.rules` — regole di accesso ai dati per ruolo (fatte rispettare dal server)
+- `firebase.json` — hosting e regole per `firebase deploy`
 - `scripts/` — utilità da riga di comando
+  - `test_store.mjs` — test degli helper di persistenza (`node scripts/test_store.mjs`)
   - `xlsx_to_json.py` — converte l'export magazzino in JSON
   - `report_anagrafica.mjs` — genera il report di normalizzazione da rivedere col cliente
 - `dati/` — dati derivati (export JSON, report)
+
+## Accessi e permessi (versione condivisa)
+
+Due accessi, uno per tipo di persona, decisi col titolare il 15/09/2026:
+
+| Funzione | Titolare | Dipendente |
+|---|---|---|
+| Giacenze, filtri, copertura, badge in ordine / in arrivo | sì | sì |
+| Costo €/100 ml e stima costo | sì | no (non viene nemmeno letto dal server) |
+| Pannello "Da riordinare o spostare": Sposta | sì | sì |
+| Pannello "Da riordinare o spostare": Riordina, lista riordino, ordini, Storico ordini | sì | no |
+| Trasferimenti (proporre, spedire, ricevere, annullare) | sì | sì |
+| Caricamento vendite da CSV | sì | sì |
+| Registrazione consegne degli ordini (fornitore e quantità, senza prezzi) | sì | sì |
+| Carico manuale e rettifica | sì | sì |
+| Inventario completo da Excel, annullamento caricamenti | sì | no |
+| Referenze, soglie, fornitori (scheda "Referenze e soglie") | sì | no |
+| Backup, ripristino, azzeramento | sì | no |
+
+Nell'app le voci riservate spariscono; in più `firestore.rules` le blocca lato server (costi e codici fornitore stanno in una collezione a parte, `riservato`, leggibile solo dal titolare).
+Nella demo si può vedere cosa vede un commesso aprendo l'app con `?ruolo=dipendente`.
+
+## Produzione (versione condivisa): come metterla in piedi
+
+Tutto sul piano gratuito di Firebase (Spark), senza carta di credito. Una volta sola, da chi fa la manutenzione:
+
+1. **Progetto**: su <https://console.firebase.google.com> crea il progetto (es. `profumari-magazzino`) con il tuo account Google, senza Google Analytics. In *Impostazioni progetto → Utenti e autorizzazioni* aggiungi il Gmail del titolare come **Proprietario**.
+2. **Firestore**: *Build → Firestore Database → Crea database*, modalità produzione, regione europea (es. `europe-west1`). Nella scheda *Regole* incolla il contenuto di `firestore.rules` e pubblica (oppure `npx firebase-tools deploy --only firestore:rules --project <id>` dopo `npx firebase-tools login`).
+3. **Accessi**: *Build → Authentication → Metodo di accesso*: abilita **Email/password**. In *Users* aggiungi due utenti con le password scelte dal titolare: `titolare@iprofumari.it` e `negozio@iprofumari.it` (il dominio è quello in `DOMINIO_ACCESSI`; nell'app si scrive solo `titolare` o `negozio`).
+4. **Ruoli**: in Firestore crea la collezione `utenti` con un documento per utente. L'**id del documento è l'UID** dell'utente (colonna "Identificatore utente" in Authentication → Users); campi: `ruolo` = `titolare` oppure `dipendente`, `nome` = testo mostrato in alto a destra (es. "Titolare", "Negozio"). Senza questo documento l'accesso viene rifiutato con un messaggio chiaro.
+5. **Configurazione dell'app**: *Impostazioni progetto → Le tue app → Aggiungi app → Web* (senza Hosting via SDK). Copia i valori di `firebaseConfig` in `app/js/config.js` (`FIREBASE_CONFIG`). Non sono segreti.
+6. **Pubblicazione**: *Build → Hosting → Inizia* (solo per attivarlo). Poi, o a mano con `npx firebase-tools deploy --only hosting --project <id>`, oppure con il workflow: nella repo GitHub crea il segreto `FIREBASE_SERVICE_ACCOUNT` (contenuto del JSON da *Impostazioni progetto → Account di servizio → Genera nuova chiave privata*) e la variabile `FIREBASE_PROJECT_ID`; ogni push sul ramo `produzione` pubblica app e regole. L'indirizzo è `https://<id>.web.app`.
+7. **Primo caricamento**: apri l'indirizzo, entra come `titolare`, vai in *Storico e backup → Ripristina da backup* e carica il backup scaricato dalla demo del titolare. Se nella demo erano stati caricati i dati dimostrativi, l'app li riconosce e propone di scartarli (inventario Aprilia simulato e vendite simulate), tenendo inventari e vendite veri.
+8. **Tablet**: su ciascun iPad apri l'indirizzo in Safari, *Condividi → Aggiungi alla schermata Home*, apri dall'icona ed entra come `negozio` (una volta sola: l'accesso resta salvato). Il titolare entra come `titolare` da qualsiasi dispositivo.
+
+Manutenzione ordinaria: password e nuovi accessi da *Authentication → Users* (per un nuovo accesso serve anche il documento in `utenti`); dati consultabili da *Firestore Database*; backup settimanale dall'app con l'accesso titolare (il piano gratuito non fa copie automatiche).
+
+Limiti del piano gratuito e uso stimato: 20.000 scritture e 50.000 letture al giorno contro qualche centinaio di scritture nei giorni di caricamento vendite e poche migliaia di letture (ogni tablet tiene una copia locale e riceve solo le differenze); 1 GB di spazio contro pochi MB l'anno.
+
+Come funziona sotto: i dati stanno in collezioni separate (`fragranze`, `riservato`, `fornitori`, `movimenti`, `lotti`, `trasferimenti`, `ordini`, `config`, `utenti`), ogni salvataggio scrive solo i documenti cambiati e ogni dispositivo riceve le modifiche degli altri in tempo reale. Senza rete si continua a lavorare sulla cache locale e le scritture si allineano al ritorno della connessione. I punti di ripristino restano sul singolo dispositivo (solo titolare).
 
 ## Regole di dominio
 
@@ -67,17 +115,19 @@ l'app non ha dipendenze esterne e funziona anche offline.
 
 Le stesse istruzioni sono nell'app, in fondo alla scheda Referenze e soglie.
 
-## Prossimi passi (fase 2: produzione)
+## Stato della fase 2 (produzione)
 
-Da decidere insieme:
+Fatto (in attesa del progetto Firebase per la prova sui dati veri):
 
-- **Sincronizzazione tra i due tablet**: oggi i dati vivono nel browser di ciascun dispositivo. L'ipotesi è Firebase (Firestore + Auth + Hosting, piano gratuito) dietro la stessa interfaccia di `store.js`, che è già isolata apposta. Da valutare anche la gestione dei conflitti (due negozi che scrivono insieme) e il comportamento offline.
-- **Accessi**: titolare e commessi, con permessi diversi (es. solo il titolare conferma ordini e rettifiche).
-- **Dove pubblicare la versione definitiva**: `main` resta la demo su GitHub Pages; la produzione si sviluppa su un ramo dedicato e si unisce quando pronta. Da decidere se avrà un indirizzo separato.
+- sincronizzazione tra i tablet, accessi e permessi per ruolo, schermata di accesso, cache offline e service worker;
+- importazione del backup della demo con riconoscimento dei dati dimostrativi;
+- regole Firestore, configurazione hosting, workflow di pubblicazione, test degli helper.
 
-Da confermare col cliente:
+Da fare:
 
-- **Inventario di Aprilia** con le stesse colonne del file Latina (Nome, Quantità, Genere, PL, PF, VF) per il caricamento iniziale vero.
+- creare il progetto Firebase e compilare `app/js/config.js` (vedi **Produzione**);
+- prova su due dispositivi con dati veri e verifica delle regole con entrambi gli accessi;
+- decidere quando unire a `main` (la demo su Pages resta locale anche con la configurazione compilata).
 - **Nomi estesi dei fornitori** PL, PF, VF: oggi negli ordini compare la sigla.
 - **Unità degli ordini**: sono in ml. Se i fornitori vendono a flacone (250 ml, 500 ml, 1 L) va aggiunto il formato per fornitore e la conversione.
 - **Costo di acquisto** per referenza (€/100 ml), oggi vuoto: serve per la stima in euro degli ordini.

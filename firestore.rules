@@ -1,0 +1,73 @@
+rules_version = '2';
+// Regole di accesso ai dati del magazzino (Firestore).
+// Ruoli: 'titolare' e 'dipendente', letti da utenti/{uid} (documento creato a mano dalla console, mai dall'app).
+// Decisioni col titolare (15/09/2026): costi e fornitori solo al titolare; consegne, carichi/rettifiche e
+// trasferimenti anche ai dipendenti; soglie, inventari, referenze, ordini e backup solo al titolare.
+service cloud.firestore {
+  match /databases/{db}/documents {
+    function collegato() { return request.auth != null; }
+    function ruolo() { return get(/databases/$(db)/documents/utenti/$(request.auth.uid)).data.ruolo; }
+    function titolare() { return collegato() && ruolo() == 'titolare'; }
+    function dipendente() { return collegato() && ruolo() == 'dipendente'; }
+    function utente() { return titolare() || dipendente(); }
+
+    // Profilo: ciascuno legge solo il proprio; nessuna scrittura dall'app.
+    match /utenti/{uid} {
+      allow read: if collegato() && request.auth.uid == uid;
+      allow write: if false;
+    }
+
+    // Anagrafica pubblica (nome, categoria, varianti, soglie per referenza).
+    // Il dipendente può solo creare la referenza "(da completare)" che nasce da una vendita con codice sconosciuto.
+    match /fragranze/{codice} {
+      allow read: if utente();
+      allow write: if titolare();
+      allow create: if dipendente() && request.resource.data.nome == '(da completare)';
+    }
+
+    // Costo €/100 ml, codici fornitore, fornitore preferito: solo il titolare, in lettura e scrittura.
+    match /riservato/{codice} {
+      allow read, write: if titolare();
+    }
+
+    // Sigla e nome esteso dei fornitori: il nome compare nelle consegne, quindi si legge; si modifica solo dal titolare.
+    match /fornitori/{sigla} {
+      allow read: if utente();
+      allow write: if titolare();
+    }
+
+    // Registro movimenti: solo aggiunte. Il dipendente registra vendite, carichi, rettifiche e trasferimenti;
+    // l'inventario completo resta al titolare, come le correzioni al registro.
+    match /movimenti/{id} {
+      allow read: if utente();
+      allow write: if titolare();
+      allow create: if dipendente() && request.resource.data.tipo in ['vendita', 'carico', 'rettifica', 'trasf_in', 'trasf_out'];
+    }
+
+    // Lotti di caricamento: il dipendente crea quelli delle vendite; annullare un lotto è del titolare.
+    match /lotti/{id} {
+      allow read: if utente();
+      allow write: if titolare();
+      allow create: if dipendente() && request.resource.data.tipo == 'vendite';
+    }
+
+    // Trasferimenti tra negozi: tutto a tutti (proposta, spedizione, ricezione, annullamento).
+    match /trasferimenti/{id} {
+      allow read, write: if utente();
+    }
+
+    // Ordini ai fornitori: li crea il titolare. Il dipendente li legge (fornitore e quantità, senza prezzi)
+    // e può solo registrare la consegna, cioè aggiornare le righe.
+    match /ordini/{id} {
+      allow read: if utente();
+      allow write: if titolare();
+      allow update: if dipendente() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['righe']);
+    }
+
+    // Configurazione.
+    match /config/soglie { allow read: if utente(); allow write: if titolare(); }
+    match /config/meta { allow read: if utente(); allow write: if titolare(); }
+    match /config/piano_riordini { allow read, write: if titolare(); }
+    match /config/piano_spostamenti { allow read, write: if utente(); }
+  }
+}

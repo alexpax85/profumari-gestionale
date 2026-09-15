@@ -24,6 +24,33 @@ header.top .sep { width: 1px; height: 30px; background: rgba(255,255,255,.25); }
 header.top h1 { font-size: .95rem; font-weight: 300; letter-spacing: .28em; text-transform: uppercase; color: rgba(255,255,255,.85); margin: 0; }
 header.top .agg { font-size: .82rem; color: rgba(255,255,255,.6); line-height: 1.5; }
 header.top .agg b { color: #fff; font-weight: 600; }
+header.top .utente { display: flex; align-items: center; gap: 10px; font-size: .85rem; color: rgba(255,255,255,.85); }
+header.top .utente:empty { display: none; }
+header.top .utente .ruolo { font-weight: 600; letter-spacing: .04em; }
+header.top .utente .rete { width: 10px; height: 10px; border-radius: 50%; background: #5cd65c; box-shadow: 0 0 0 3px rgba(92,214,92,.25); }
+header.top .utente .rete.off { background: var(--warn); box-shadow: 0 0 0 3px rgba(183,121,31,.3); }
+header.top .utente button.esci { background: transparent; color: #fff; border-color: rgba(255,255,255,.4); }
+header.top .utente button.esci:hover { background: rgba(255,255,255,.12); }
+
+/* ---- schermata di accesso (versione condivisa) ---- */
+#accesso { position: fixed; inset: 0; z-index: 40; background: var(--nero); color: #fff; display: flex; align-items: center; justify-content: center; padding: 24px; overflow: auto; }
+#accesso::before { content: ""; position: absolute; inset: 0; background: radial-gradient(ellipse at 20% 0%, rgba(1,138,134,.45), transparent 55%), radial-gradient(ellipse at 100% 100%, rgba(1,138,134,.25), transparent 50%); }
+#accesso[hidden] { display: none; }
+.pannello-accesso { position: relative; width: min(100%, 380px); display: flex; flex-direction: column; gap: 14px; text-align: center; }
+.pannello-accesso[hidden] { display: none; }
+.pannello-accesso img { height: 56px; margin: 0 auto 6px; }
+.pannello-accesso h2 { font-weight: 300; font-size: 1.1rem; letter-spacing: .28em; text-transform: uppercase; color: rgba(255,255,255,.85); }
+.pannello-accesso p { margin: 0; color: rgba(255,255,255,.7); }
+.pannello-accesso label.campo { text-align: left; color: rgba(255,255,255,.6); }
+.pannello-accesso input { background: rgba(255,255,255,.08); color: #fff; border-color: rgba(255,255,255,.25); }
+.pannello-accesso input:focus { outline-color: var(--teal); border-color: var(--teal); }
+.pannello-accesso button.primario { margin-top: 4px; }
+.pannello-accesso .errore-accesso { color: #ffb4ae; font-weight: 600; }
+.pannello-accesso .errore-accesso[hidden] { display: none; }
+.pannello-accesso .piccolo-testo { color: rgba(255,255,255,.5); }
+.pannello-accesso.caricamento img { opacity: .9; animation: respiro 1.6s ease-in-out infinite; }
+@keyframes respiro { 0%, 100% { opacity: .5; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .pannello-accesso.caricamento img { animation: none; } }
 
 /* ---- navigazione a sottolineatura ---- */
 nav.tabs { display: flex; gap: 4px; overflow-x: auto; margin: 0 -20px; padding: 0 20px; position: sticky; top: 0; background: var(--bg); z-index: 5; border-bottom: 1px solid var(--line); scrollbar-width: none; }

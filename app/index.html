@@ -18,6 +18,7 @@
 <header class="top">
   <div class="brand"><img src="logo.svg" alt="i profumari" class="logo"><span class="sep"></span><h1>Magazzino</h1></div>
   <div class="agg" id="aggiornamento"></div>
+  <div class="utente" id="utente"></div>
 </header>
 <nav class="tabs" id="tabs">
   <button data-tab="magazzino" class="attivo">Giacenze</button>
@@ -39,6 +40,18 @@
 </main>
 <dialog id="dlg"></dialog>
 <div id="toast"></div>
+<div id="accesso" hidden>
+  <form id="form-accesso" class="pannello-accesso" hidden>
+    <img src="logo.svg" alt="i profumari"><h2>Magazzino</h2>
+    <p>Entra con l'accesso del negozio o quello del titolare.</p>
+    <label class="campo">Accesso<input name="nome" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="es. negozio oppure titolare" required></label>
+    <label class="campo">Password<input name="password" type="password" autocomplete="current-password" required></label>
+    <p id="accesso-errore" class="errore-accesso" hidden></p>
+    <button class="primario" type="submit">Entra</button>
+    <p class="piccolo-testo">Password dimenticata? Chiedi ad Alessio: la sostituisce dal pannello di gestione.</p>
+  </form>
+  <div class="pannello-accesso caricamento" id="accesso-caricamento"><img src="logo.svg" alt=""><p>Caricamento del magazzino…</p></div>
+</div>
 <script type="module" src="js/app.js"></script>
 </body>
 </html>

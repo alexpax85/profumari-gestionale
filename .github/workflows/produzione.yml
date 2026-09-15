@@ -1,0 +1,34 @@
+# Pubblica la versione condivisa su Firebase Hosting a ogni push sul ramo `produzione`
+# (e aggiorna le regole di Firestore). Serve un segreto FIREBASE_SERVICE_ACCOUNT nella repo:
+# console Firebase → Impostazioni progetto → Account di servizio → "Genera nuova chiave privata",
+# e la variabile FIREBASE_PROJECT_ID con l'id del progetto. Vedi README, sezione "Produzione".
+name: Pubblica la versione condivisa
+on:
+  push:
+    branches: [produzione]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: produzione
+  cancel-in-progress: true
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Controlli veloci
+        run: node scripts/test_store.mjs
+      - name: Regole Firestore
+        run: |
+          printf '%s' "$SERVICE_ACCOUNT" > "$RUNNER_TEMP/sa.json"
+          npx --yes firebase-tools@latest deploy --only firestore:rules --project "${{ vars.FIREBASE_PROJECT_ID }}" --non-interactive
+        env:
+          SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/sa.json
+      - uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          projectId: ${{ vars.FIREBASE_PROJECT_ID }}
+          channelId: live

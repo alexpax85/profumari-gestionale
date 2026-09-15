@@ -1,13 +1,21 @@
 import { NEGOZI, CATEGORIE, categoriaDaCodice, normalizzaMagazzino, parseCSV, analizzaVendite } from './normalizza.js';
-import { LocalStore, statoVuoto } from './store.js';
+import { creaStore, statoVuoto, lottiDemo, senzaDemo } from './store.js';
 
-const store = new LocalStore();
-let stato = store.load();
-if (!stato.obiettivi) { stato.obiettivi = {}; for (const c of CATEGORIE) stato.obiettivi[c] = (Number(stato.soglie[c]) || 0) * 2; }
-if (!stato.piano) stato.piano = { riordini: {}, spostamenti: {} };
-if (!stato.ordini) stato.ordini = [];
-if (!stato.fornitori) stato.fornitori = [];
-for (const f of Object.values(stato.fragranze)) { if (!f.codiciFornitore) f.codiciFornitore = {}; }
+let store = null;      // LocalStore (dati nel browser, demo) o FirebaseStore (condiviso tra i tablet): scelto in avvio()
+let utente = null;     // { ruolo: 'titolare' | 'dipendente', nome, email, locale? }
+let stato = statoVuoto();
+/** Completa uno stato caricato (backup vecchi, campi aggiunti nel tempo). */
+function migra(s) {
+  if (!s.obiettivi) { s.obiettivi = {}; for (const c of CATEGORIE) s.obiettivi[c] = (Number(s.soglie[c]) || 0) * 2; }
+  if (!s.piano) s.piano = { riordini: {}, spostamenti: {} };
+  if (!s.ordini) s.ordini = [];
+  if (!s.fornitori) s.fornitori = [];
+  for (const f of Object.values(s.fragranze)) { if (!f.codiciFornitore) f.codiciFornitore = {}; }
+  return s;
+}
+/** Titolare: vede costi e fornitori, gestisce ordini, soglie, inventari, referenze e backup. Il dipendente fa tutto il resto. */
+const T = () => utente?.ruolo === 'titolare';
+const SCHEDE_TITOLARE = new Set(['anagrafica']);
 const SETTIMANE_MIN = 4;   // settimane di vendite necessarie per attivare le proposte basate sulla copertura
 const ORIZZONTE_SETT = 8;  // nessuna proposta porta chi riceve oltre questa copertura: evita di svuotare chi cede
 let tab = 'magazzino';
@@ -33,7 +41,7 @@ const adesso = () => new Date().toISOString();
 const altro = negozio => NEGOZI.find(n => n !== negozio);
 
 function salva(etichetta) {
-  if (!store.save(stato, etichetta)) toast('Attenzione: salvataggio non riuscito (spazio del browser esaurito?)');
+  if (!store.save(stato, etichetta)) toast(store.condiviso ? 'Attenzione: salvataggio non riuscito, i dati non sono ancora caricati.' : 'Attenzione: salvataggio non riuscito (spazio del browser esaurito?)');
 }
 function toast(msg, azione) {
   const t = $('#toast'); t.innerHTML = esc(msg) + (azione ? ` <button class="piccolo" id="toast-az">${esc(azione.label)}</button>` : '');
@@ -269,6 +277,8 @@ function collegaRicezione(o, el) {
     const tot = ok.reduce((a, x) => a + x.ml, 0);
     if (!ok.length && !v.some(x => x.esito === 'annulla')) { toast('Nessuna voce ricevuta o annullata.'); return; }
     if (!await conferma('Registrare la consegna?', `<b>${ok.length}</b> voci per <b>${fmtMl(tot)}</b> entrano in giacenza a <b>${esc(o.negozio)}</b>.${v.some(x => x.esito === 'attesa') ? `<br>${v.filter(x => x.esito === 'attesa').length} voci restano in attesa di una prossima consegna.` : ''}${v.some(x => x.esito === 'annulla') ? `<br>${v.filter(x => x.esito === 'annulla').length} voci vengono annullate.` : ''}`, 'Carica')) return;
+    // durante la conferma l'altro negozio può aver aggiornato i dati: si lavora sull'ordine attuale
+    o = stato.ordini.find(x => x.id === o.id) || o;
     const ts = adesso();
     for (const x of v) {
       const r = o.righe[x.i];
@@ -283,8 +293,10 @@ function collegaRicezione(o, el) {
 
 // ---------- render ----------
 function render() {
+  if (!T() && SCHEDE_TITOLARE.has(tab)) tab = 'magazzino';
   renderHeader();
-  $$('#tabs button').forEach(b => b.classList.toggle('attivo', b.dataset.tab === tab));
+  $$('#tabs button').forEach(b => { b.hidden = !T() && SCHEDE_TITOLARE.has(b.dataset.tab); b.classList.toggle('attivo', b.dataset.tab === tab); });
+  $('#tabs button[data-tab=storico]').textContent = T() ? 'Storico e backup' : 'Storico';
   $$('section.tab').forEach(s => s.classList.toggle('attivo', s.id === 'tab-' + tab));
   const n = sottoScorta().length;
   const bt = $('#tabs button[data-tab=magazzino]'); bt.innerHTML = 'Giacenze' + (n ? `<span class="n">${n}</span>` : '');
@@ -296,12 +308,21 @@ function render() {
 function renderHeader() {
   const u = ultimoAggiornamento();
   $('#aggiornamento').innerHTML = NEGOZI.map(n => `<div><b>${n}</b>: vendite fino al <b>${fmtData(u[n].ultimaVendita)}</b> · ultimo movimento ${fmtData(u[n].ultimoMovimento)}</div>`).join('');
+  const ut = $('#utente');
+  if (!ut) return;
+  if (!utente || utente.locale) { ut.innerHTML = ''; return; }
+  const inLinea = navigator.onLine !== false;
+  ut.innerHTML = `<span class="rete ${inLinea ? 'on' : 'off'}" title="${inLinea ? 'In linea: le modifiche arrivano subito all\'altro negozio' : 'Senza rete: si continua a lavorare, tutto si allinea quando torna la connessione'}"></span><span class="ruolo">${esc(utente.nome || (utente.ruolo === 'titolare' ? 'Titolare' : 'Dipendente'))}</span><button class="piccolo esci" id="btn-esci">Esci</button>`;
+  $('#btn-esci').onclick = async () => {
+    if (!await conferma('Uscire dall\'accesso?', 'Per rientrare servirà di nuovo la password.', 'Esci')) return;
+    await store.esci(); location.reload();
+  };
 }
 
 function chiavePiano(codice, negozio) { return `${codice}|${negozio}`; }
 function arr10(x, su) { return su ? Math.ceil(x / 10) * 10 : Math.floor(x / 10) * 10; }
 function salvaPiano() { store.save(stato, 'piano', false); }
-function contaPiano() { return Object.keys(stato.piano.riordini).length + Object.keys(stato.piano.spostamenti).length; }
+function contaPiano() { return (T() ? Object.keys(stato.piano.riordini).length : 0) + Object.keys(stato.piano.spostamenti).length; }
 function mlRiordinoDefault(f, negozio, g) { const serve = obiettivoDi(f) - (g[f.codice]?.[negozio] || 0); return serve >= 10 ? arr10(serve, true) : 100; }
 function mlSpostamentoDefault(f, ricevente, g, p) {
   if (p.tipo === 'sposta') return p.ml;
@@ -317,7 +338,10 @@ function renderMagazzino() {
   const el = $('#tab-magazzino');
   const fr = fragranzeOrdinate();
   if (!fr.length) {
-    el.innerHTML = `<div class="card benvenuto"><img src="logo.svg" alt="i profumari"><h2>Il magazzino è vuoto</h2><p>Per iniziare importa le giacenze iniziali di ciascun negozio dal file Excel dell'inventario (scheda <b>Carichi</b> → "Importa inventario da Excel"), poi carica le vendite dal CSV del gestionale.</p><div class="azioni"><button class="primario" data-vai="movimenti">Importa l'inventario</button>${window.DATI_DEMO ? `<button id="btn-demo">Prova con i dati dimostrativi</button>` : ''}</div>${window.DATI_DEMO ? `<p class="piccolo-testo" style="margin-top:14px;opacity:.7">I dati dimostrativi usano l'inventario reale di Latina, un inventario simulato per Aprilia e sei settimane di vendite simulate.</p>` : ''}</div>`;
+    const demo = !!window.DATI_DEMO && !store.condiviso;
+    el.innerHTML = T()
+      ? `<div class="card benvenuto"><img src="logo.svg" alt="i profumari"><h2>Il magazzino è vuoto</h2><p>Per iniziare importa le giacenze iniziali di ciascun negozio dal file Excel dell'inventario (scheda <b>Carichi</b> → "Importa inventario da Excel"), poi carica le vendite dal CSV del gestionale.${store.condiviso ? ' Se hai già lavorato sulla demo, ripristina il suo backup da <b>Storico e backup</b>.' : ''}</p><div class="azioni"><button class="primario" data-vai="movimenti">Importa l'inventario</button>${demo ? `<button id="btn-demo">Prova con i dati dimostrativi</button>` : ''}</div>${demo ? `<p class="piccolo-testo" style="margin-top:14px;opacity:.7">I dati dimostrativi usano l'inventario reale di Latina, un inventario simulato per Aprilia e sei settimane di vendite simulate.</p>` : ''}</div>`
+      : `<div class="card benvenuto"><img src="logo.svg" alt="i profumari"><h2>Il magazzino è vuoto</h2><p>Il titolare deve ancora caricare l'inventario iniziale. Appena lo fa, le giacenze compaiono qui da sole.</p></div>`;
     const bd = $('#btn-demo'); if (bd) bd.onclick = caricaDemo;
     return;
   }
@@ -356,7 +380,7 @@ function renderMagazzino() {
     return `<td class="num${filtro.negozio === n ? ' evid' : ''}"><span class="badge ${st}">${fmtMl(ml)}</span>${mov ? `<div class="mov">${mov}</div>` : ''}${vel.attiva ? `<div class="cop">${fmtCop(copertura(ml, vel.per[f.codice]?.[n] || 0))}</div>` : ''}</td>`;
   };
   const righe = visibili.map(f => {
-    return `<tr><td class="cod">${f.codice}</td><td>${esc(f.brand ? f.brand + ' - ' : '')}${esc(f.nome)}${f.attivo === false ? ' <span class="badge grigio">disattivata</span>' : ''}</td><td class="muted piccolo-testo">${esc(f.categoria)}</td>${NEGOZI.map(n => cellaMl(f, n)).join('')}<td class="num muted">${sogliaDi(f)} / ${obiettivoDi(f)}</td><td><button class="piccolo azione-piano" data-piu="${f.codice}" title="Ordina o sposta questa referenza">Ordina o sposta</button></td></tr>`;
+    return `<tr><td class="cod">${f.codice}</td><td>${esc(f.brand ? f.brand + ' - ' : '')}${esc(f.nome)}${f.attivo === false ? ' <span class="badge grigio">disattivata</span>' : ''}</td><td class="muted piccolo-testo">${esc(f.categoria)}</td>${NEGOZI.map(n => cellaMl(f, n)).join('')}<td class="num muted">${sogliaDi(f)} / ${obiettivoDi(f)}</td><td><button class="piccolo azione-piano" data-piu="${f.codice}" title="${T() ? 'Ordina o sposta questa referenza' : 'Sposta questa referenza tra i negozi'}">${T() ? 'Ordina o sposta' : 'Sposta'}</button></td></tr>`;
   }).join('');
 
   const chips = [];
@@ -383,7 +407,7 @@ function renderMagazzino() {
     else info = `<span class="badge sotto">da riordinare</span> ${esc(p.motivo)}`;
     return `<tr class="${x.stato}"><td class="cod">${x.f.codice}</td><td>${esc(x.f.brand)} ${esc(x.f.nome)}<div class="cop">${esc(x.f.categoria)}</div></td><td>${x.negozio}</td><td class="num"><span class="badge ${x.stato}">${fmtMl(x.ml)}</span>${giaOrd ? `<div class="cop"><span class="badge ordine">+${fmtMl(giaOrd)}</span></div>` : ''}${cop(x.negozio)}</td><td class="num muted">${x.soglia} / ${obiettivoDi(x.f)}</td><td class="num">${mitt}: ${fmtMl(alt)}${cop(mitt)}</td>
       <td class="pian"><div class="cop">${info}</div>
-        <label class="chk2"><input type="checkbox" data-rio="${k}" ${rio ? 'checked' : ''}> Riordina${rio ? ` <b>${rio.ml} ml</b>` : ''}${giaOrd && !rio ? ` <span class="muted">(ancora?)</span>` : ''}</label>
+        ${T() ? `<label class="chk2"><input type="checkbox" data-rio="${k}" ${rio ? 'checked' : ''}> Riordina${rio ? ` <b>${rio.ml} ml</b>` : ''}${giaOrd && !rio ? ` <span class="muted">(ancora?)</span>` : ''}</label>` : ''}
         <label class="chk2${spoPossibile ? '' : ' disab'}"><input type="checkbox" data-spo="${k}" ${spo ? 'checked' : ''} ${spoPossibile ? '' : 'disabled'}> Sposta da ${mitt}${spo ? ` <b>${spo.ml} ml</b>` : ''}</label></td></tr>`;
   };
   const kpi = (cls, v, l, dati) => `<button class="card kpi-btn ${cls}" data-kpi='${JSON.stringify(dati)}' title="Apri la vista filtrata"><div class="v">${v}</div><div class="l">${l}</div></button>`;
@@ -395,7 +419,7 @@ function renderMagazzino() {
     </div>
     ${ssVis.length ? `<details class="card avviso" id="pannello-proposte" ${pannelloAperto ? 'open' : ''}><summary>Da riordinare o spostare: ${ssVis.length} ${ssVis.length === 1 ? 'caso' : 'casi'}${chips.length ? ` <span class="muted piccolo-testo">(con i filtri attivi)</span>` : ''}</summary>
       <p class="piccolo-testo" style="margin:10px 0 12px">${spiegazione} Spunta <b>Riordina</b> o <b>Sposta</b> sulle voci che vuoi trattare, poi apri il <b>Piano</b> per rifinire quantità e confermare.</p>
-      <div class="azioni" style="margin:0 0 12px"><button class="piccolo" data-sel="spo">Spunta tutte le proposte di spostamento</button><button class="piccolo" data-sel="rio">Spunta tutte le "da riordinare"</button><button class="piccolo" data-sel="niente" ${nPiano ? '' : 'disabled'}>Togli tutte le spunte</button><button class="piccolo primario" data-vai="piano" ${nPiano ? '' : 'disabled'}>Apri il piano (${nPiano})</button></div>
+      <div class="azioni" style="margin:0 0 12px"><button class="piccolo" data-sel="spo">Spunta tutte le proposte di spostamento</button>${T() ? `<button class="piccolo" data-sel="rio">Spunta tutte le "da riordinare"</button>` : ''}<button class="piccolo" data-sel="niente" ${nPiano ? '' : 'disabled'}>Togli tutte le spunte</button><button class="piccolo primario" data-vai="piano" ${nPiano ? '' : 'disabled'}>Apri il piano (${nPiano})</button></div>
       <div class="tabella-wrap"><table><thead><tr><th>Codice</th><th>Referenza</th><th>Negozio</th><th class="num">Giacenza</th><th class="num">Min / Obiettivo</th><th class="num">Altro negozio</th><th>Proposta e scelta</th></tr></thead><tbody>
       ${ssVis.map(rigaProposta).join('')}
       </tbody></table></div></details>` : `<div class="card" style="background:var(--ok-bg)"><b>${chips.length ? 'Nessuna referenza sotto scorta con i filtri attivi.' : 'Tutte le referenze sono sopra la scorta minima.'}</b></div>`}
@@ -450,15 +474,16 @@ function renderMagazzino() {
 function renderMagazzinoSoloTabella() { const pos = $('#cerca').selectionStart; renderMagazzino(); const c = $('#cerca'); c.focus(); c.setSelectionRange(pos, pos); }
 
 /** Finestra per aggiungere o modificare a mano una voce del piano (riordino o spostamento), per qualsiasi referenza. */
-function dialogPiano({ codice = '', tipo = 'riordino', negozio = NEGOZI[0], da = null } = {}) {
+function dialogPiano({ codice = '', tipo = T() ? 'riordino' : 'spostamento', negozio = NEGOZI[0], da = null } = {}) {
+  if (!T()) tipo = 'spostamento';   // il riordino (fornitori e costi) è del titolare
   const g = giacenze(), vel = velocita();
   const d = $('#dlg');
   const opzioni = fragranzeOrdinate().filter(f => f.attivo !== false || f.codice === codice).map(f => `<option value="${f.codice}" ${f.codice === codice ? 'selected' : ''}>${esc(nomeF(f.codice))}</option>`).join('');
-  d.innerHTML = `<h2>Ordina o sposta</h2>
+  d.innerHTML = `<h2>${T() ? 'Ordina o sposta' : 'Sposta tra i negozi'}</h2>
     <form id="form-piano">
       <div class="riga"><label class="campo" style="flex:1 1 100%">Referenza<select name="codice"><option value="">— scegli —</option>${opzioni}</select></label></div>
       <div id="p-info" class="card info" style="margin:12px 0;padding:12px"></div>
-      <div class="riga"><label class="campo">Operazione<select name="tipo">
+      <div class="riga"><label class="campo" ${T() ? '' : 'hidden'}>Operazione<select name="tipo">
         <option value="riordino" ${tipo === 'riordino' ? 'selected' : ''}>Riordino dal fornitore</option>
         <option value="spostamento" ${tipo === 'spostamento' ? 'selected' : ''}>Spostamento tra negozi</option></select></label>
         <label class="campo" id="p-l-negozio">Negozio<select name="negozio">${NEGOZI.map(n => `<option ${n === negozio ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
@@ -533,10 +558,12 @@ function dialogPiano({ codice = '', tipo = 'riordino', negozio = NEGOZI[0], da =
 function renderPiano() {
   const el = $('#tab-piano');
   const g = giacenze(), vel = velocita();
-  const rio = Object.entries(stato.piano.riordini).sort((a, b) => a[1].codice.localeCompare(b[1].codice) || a[1].negozio.localeCompare(b[1].negozio));
+  const rio = T() ? Object.entries(stato.piano.riordini).sort((a, b) => a[1].codice.localeCompare(b[1].codice) || a[1].negozio.localeCompare(b[1].negozio)) : [];
   const spo = Object.entries(stato.piano.spostamenti).sort((a, b) => a[1].codice.localeCompare(b[1].codice));
   if (!rio.length && !spo.length) {
-    el.innerHTML = `<div class="card info"><h2>Piano di riordino e trasferimenti</h2><p>Qui arrivano le voci che spunti nel pannello <b>Da riordinare o spostare</b> della scheda Giacenze o che aggiungi con <b>Ordina o sposta</b>. Per ogni voce rifinisci quantità e fornitore, poi generi l'ordine (Excel o PDF) per ciascun fornitore e negozio di consegna, e crei i trasferimenti tra i negozi in un colpo solo.</p><div class="azioni"><button class="primario" data-vai="magazzino">Vai alle giacenze</button><button id="piano-nuovo">Aggiungi una voce a mano</button></div>${stato.ordini.length ? `<p class="muted piccolo-testo" style="margin-top:12px">Gli ordini già generati sono in <b>Storico e backup</b>.</p>` : ''}</div>`;
+    el.innerHTML = T()
+      ? `<div class="card info"><h2>Piano di riordino e trasferimenti</h2><p>Qui arrivano le voci che spunti nel pannello <b>Da riordinare o spostare</b> della scheda Giacenze o che aggiungi con <b>Ordina o sposta</b>. Per ogni voce rifinisci quantità e fornitore, poi generi l'ordine (Excel o PDF) per ciascun fornitore e negozio di consegna, e crei i trasferimenti tra i negozi in un colpo solo.</p><div class="azioni"><button class="primario" data-vai="magazzino">Vai alle giacenze</button><button id="piano-nuovo">Aggiungi una voce a mano</button></div>${stato.ordini.length ? `<p class="muted piccolo-testo" style="margin-top:12px">Gli ordini già generati sono in <b>Storico e backup</b>.</p>` : ''}</div>`
+      : `<div class="card info"><h2>Piano dei trasferimenti</h2><p>Qui arrivano le voci che spunti con <b>Sposta</b> nel pannello <b>Da riordinare o spostare</b> della scheda Giacenze, o che aggiungi con il pulsante <b>Sposta</b> sulla riga di una referenza. Rifinisci i ml e crei i trasferimenti tra i negozi in un colpo solo. I riordini ai fornitori li gestisce il titolare.</p><div class="azioni"><button class="primario" data-vai="magazzino">Vai alle giacenze</button><button id="piano-nuovo">Aggiungi una voce a mano</button></div></div>`;
     const bn = $('#piano-nuovo'); if (bn) bn.onclick = () => dialogPiano({});
     return;
   }
@@ -572,7 +599,7 @@ function renderPiano() {
     return `<tr><td class="cod">${t.codice}</td><td>${esc(nomeF(t.codice)).replace(/^\d{3} /, '')}<div class="cop">${esc(f.categoria)}</div></td><td class="nowrap">${t.da} → ${t.a}</td><td class="num">${fmtMl(gM)}${cop(t.codice, t.da)}</td><td class="num"><span class="badge ${statoScorta(gR, min)}">${fmtMl(gR)}</span>${cop(t.codice, t.a)}</td><td class="num muted">${min} / ${obiettivoDi(f)}</td><td class="num"><input class="mini" type="number" min="10" step="10" inputmode="numeric" value="${t.ml}" data-spo-ml="${k}"></td><td class="num" data-resta="${k}">${fmtMl(resta)} <span class="muted">/ ${fmtMl(gR + t.ml)}</span></td><td><input class="nota" value="${esc(t.note || '')}" placeholder="nota" data-spo-note="${k}"></td><td data-avviso="${k}">${avviso}</td><td><button class="piccolo" data-spo-del="${k}" title="Togli dalla lista">✕</button></td></tr>`;
   }).join('');
   el.innerHTML = `
-    <div class="card no-print"><h2>Piano</h2><p class="muted">Rifinisci quantità e fornitore, poi genera gli ordini. Ogni ordine è per un fornitore e un negozio di consegna. Le voci restano qui finché non confermi o le togli.</p></div>
+    <div class="card no-print"><h2>Piano</h2><p class="muted">${T() ? 'Rifinisci quantità e fornitore, poi genera gli ordini. Ogni ordine è per un fornitore e un negozio di consegna. Le voci restano qui finché non confermi o le togli.' : 'Rifinisci i ml da spostare, poi crea i trasferimenti. Le voci restano qui finché non le confermi o le togli.'}</p></div>
     ${rio.length ? `<div class="card no-print" style="padding:12px 20px"><div class="cerca"><h2 style="margin:0;flex:1 1 auto">Lista riordino <span class="muted piccolo-testo">${oggi} · ${rio.length} voci</span></h2><div class="azioni" style="margin:0"><button class="piccolo primario" data-piano="nuovo-rio">+ Aggiungi voce</button><button class="pericolo piccolo" data-piano="svuota-rio">Svuota lista</button></div></div></div>${ordineGruppi.map(cardGruppo).join('')}` : ''}
     ${spo.length ? `<div class="card stampa-spo"><div class="cerca"><h2 style="margin:0;flex:1 1 auto">Trasferimenti tra negozi <span class="muted piccolo-testo">${oggi}</span></h2><div class="azioni no-print" style="margin:0"><button class="piccolo primario" data-piano="nuovo-spo">+ Aggiungi voce</button><button class="piccolo" data-piano="copia-spo">Copia testo</button><button class="piccolo" data-piano="stampa">Stampa</button></div></div>
       <div class="tabella-wrap"><table><thead><tr><th>Codice</th><th>Referenza</th><th>Tratta</th><th class="num">Giacenza chi cede</th><th class="num">Giacenza chi riceve</th><th class="num">Min / Obiettivo</th><th class="num">ml da spostare</th><th class="num">Dopo: cede / riceve</th><th>Nota</th><th></th><th class="no-print"></th></tr></thead><tbody>${righeSpo}</tbody></table></div>
@@ -737,8 +764,10 @@ function renderTrasferimenti() {
     salva('nuovo trasferimento'); toast('Trasferimento proposto.'); render();
   };
   $$('[data-tr]', el).forEach(b => b.onclick = async () => {
-    const t = stato.trasferimenti.find(x => x.id === b.dataset.id); const nuovo = b.dataset.tr;
+    let t = stato.trasferimenti.find(x => x.id === b.dataset.id); const nuovo = b.dataset.tr;
     if (nuovo === 'annullato' && !await conferma('Annullare il trasferimento?', `${esc(nomeF(t.codice))}, ${fmtMl(t.ml)} da ${t.da} a ${t.a}.${t.stato === 'spedito' ? ' I ml torneranno in giacenza a ' + t.da + '.' : ''}`, 'Annulla trasferimento', true)) return;
+    t = stato.trasferimenti.find(x => x.id === b.dataset.id);   // l'altro negozio può averlo aggiornato nel frattempo
+    if (!t || t.stato === 'ricevuto' || t.stato === 'annullato' || (nuovo === 'ricevuto' && t.stato !== 'spedito')) { toast('Il trasferimento è già stato aggiornato dall\'altro negozio.'); render(); return; }
     if (nuovo === 'spedito') aggiungiMovimento({ dataEvento: adesso(), negozio: t.da, codice: t.codice, tipo: 'trasf_out', ml: -t.ml, rif: t.id, note: `verso ${t.a}` });
     if (nuovo === 'ricevuto') aggiungiMovimento({ dataEvento: adesso(), negozio: t.a, codice: t.codice, tipo: 'trasf_in', ml: t.ml, rif: t.id, note: `da ${t.da}` });
     if (nuovo === 'annullato' && t.stato === 'spedito') aggiungiMovimento({ dataEvento: adesso(), negozio: t.da, codice: t.codice, tipo: 'trasf_in', ml: t.ml, rif: t.id, note: `rientro per annullamento` });
@@ -782,9 +811,9 @@ function renderMovimenti() {
         <label class="campo" style="flex:2 1 200px">Nota<input name="note" placeholder="es. fornitore, DDT…"></label>
         <button class="primario stretto" type="submit">Registra</button>
       </form><p id="mov-disp" class="muted piccolo-testo"></p></div>
-    <div class="card"><h2>Importa inventario da Excel</h2>
+    ${T() ? `<div class="card"><h2>Importa inventario da Excel</h2>
       <p class="muted">Per il caricamento iniziale (o per un inventario completo): esporta l'elenco dal vecchio programma di magazzino (colonne <i>Nome</i> e <i>Quantità</i>) in .xlsx o .csv e scegli il negozio a cui si riferisce. Le quantità sono in ml. Se il negozio ha già giacenze, ogni referenza viene portata al valore dell'inventario con una rettifica.</p>
-      <div class="riga"><label class="campo">Negozio<select id="g-negozio">${NEGOZI.map(n => `<option>${n}</option>`).join('')}</select></label><label class="campo" style="flex:2 1 260px">File inventario<input type="file" id="file-giacenze" accept=".xlsx,.xls,.csv"></label></div></div>
+      <div class="riga"><label class="campo">Negozio<select id="g-negozio">${NEGOZI.map(n => `<option>${n}</option>`).join('')}</select></label><label class="campo" style="flex:2 1 260px">File inventario<input type="file" id="file-giacenze" accept=".xlsx,.xls,.csv"></label></div></div>` : ''}
     <div class="card"><h3>Ultimi carichi e rettifiche</h3>${recenti.length ? `<div class="tabella-wrap"><table><thead><tr><th>Quando</th><th>Negozio</th><th>Referenza</th><th>Tipo</th><th class="num">ml</th><th>Nota</th></tr></thead><tbody>${recenti.map(m => `<tr><td>${fmtData(m.ts)}</td><td>${m.negozio}</td><td>${esc(nomeF(m.codice))}</td><td>${m.tipo}</td><td class="num">${m.ml > 0 ? '+' : ''}${m.ml}</td><td class="muted">${esc(m.note || '')}</td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">Nessuno.</p>'}</div>`;
   $$('[data-ricevi]', el).forEach(b => b.onclick = () => { ricezione = b.dataset.ricevi; render(); $('#ricezione')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); });
   $$('[data-ordine]', el).forEach(b => b.onclick = () => dialogOrdine(stato.ordini.find(x => x.id === b.dataset.ordine)));
@@ -802,7 +831,8 @@ function renderMovimenti() {
     aggiungiMovimento({ dataEvento: adesso(), negozio, codice, tipo, ml: delta, rif: '', note: form.note.value });
     salva(`${tipo} ${codice}`); toast(`${tipo === 'carico' ? 'Carico' : 'Rettifica'} registrata: ${delta > 0 ? '+' : ''}${delta} ml.`); render();
   };
-  $('#file-giacenze').onchange = async e => {
+  const fileGiacenze = $('#file-giacenze');
+  if (fileGiacenze) fileGiacenze.onchange = async e => {
     const f = e.target.files[0]; if (!f) return;
     let righe;
     try { righe = await leggiInventario(f); } catch (err) { console.error(err); toast('Non riesco a leggere il file: ' + err.message); return; }
@@ -856,6 +886,7 @@ function applicaInventario(a) {
 
 function renderAnagrafica() {
   const el = $('#tab-anagrafica');
+  if (!T()) { el.innerHTML = ''; return; }   // referenze, soglie, fornitori e costi: solo il titolare
   const fr = fragranzeOrdinate();
   const q = (filtro.testoAna || '').toLowerCase();
   const vis = fr.filter(f => !q || `${f.codice} ${f.brand} ${f.nome} ${fornitoriDi(f).map(s => s + ' ' + codiceFornitore(f, s)).join(' ')}`.toLowerCase().includes(q));
@@ -926,39 +957,46 @@ function renderStorico() {
   const snaps = store.snapshots();
   const tipoIt = { vendita: 'vendita', carico: 'carico', rettifica: 'rettifica', inventario: 'inventario', trasf_out: 'uscita trasferimento', trasf_in: 'entrata trasferimento' };
   el.innerHTML = `
-    <div class="card"><h2>Backup</h2><p class="muted">I dati vivono in questo browser/tablet. Scarica un backup ogni tanto (e prima di operazioni delicate); da un backup puoi ripristinare tutto, anche su un altro dispositivo.</p>
+    ${T() ? `<div class="card"><h2>Backup</h2><p class="muted">${store.condiviso ? 'I dati sono condivisi tra i tablet e salvati online, ma il servizio gratuito non fa copie automatiche: scarica un backup una volta a settimana e prima delle operazioni delicate. Da un backup si ripristina tutto, per tutti i dispositivi.' : 'I dati vivono in questo browser/tablet. Scarica un backup ogni tanto (e prima di operazioni delicate); da un backup puoi ripristinare tutto, anche su un altro dispositivo.'}</p>
       <div class="azioni"><button id="bk-esporta" class="primario">Scarica backup</button><label class="btn" style="display:inline-flex;align-items:center">Ripristina da backup <input type="file" id="bk-importa" accept=".json" style="display:none"></label><button id="bk-azzera" class="pericolo">Azzera tutti i dati</button></div>
-      ${snaps.length ? `<details style="margin-top:12px"><summary>Punti di ripristino automatici (${snaps.length})</summary><p class="muted piccolo-testo">Prima di ogni salvataggio viene conservata una copia dello stato precedente. Utile per tornare indietro dopo un errore.</p><ul class="pulita">${snaps.map((s, i) => `<li>${fmtData(s.ts)} · prima di: <b>${esc(s.etichetta || '-')}</b> <button class="piccolo" data-snap="${i}" style="float:right">Ripristina</button></li>`).join('')}</ul></details>` : ''}</div>
-    ${stato.ordini.length ? `<div class="card"><h2>Ordini confermati (${stato.ordini.length})</h2><p class="muted piccolo-testo">Da qui puoi riscaricare Excel o PDF di ogni ordine.</p><div class="tabella-wrap"><table><thead><tr><th>Quando</th><th>Fornitore</th><th>Consegna</th><th class="num">Voci</th><th class="num">Totale</th><th>Stato</th><th></th></tr></thead><tbody>${stato.ordini.slice().reverse().map(o => `<tr><td>${fmtData(o.ts)}</td><td>${esc(nomeFornitore(o.fornitore) || '–')}</td><td>${esc(o.negozio || '–')}</td><td class="num">${o.righe.length}</td><td class="num">${fmtMl(o.totMl)}</td><td>${badgeOrdine(o)}</td><td class="azioni" style="margin:0"><button class="piccolo" data-ordine="${o.id}">Vedi</button><button class="piccolo" data-ordine-excel="${o.id}">Excel</button><button class="piccolo" data-ordine-stampa="${o.id}">PDF</button></td></tr>`).join('')}</tbody></table></div></div>` : ''}
+      ${snaps.length ? `<details style="margin-top:12px"><summary>Punti di ripristino automatici (${snaps.length})</summary><p class="muted piccolo-testo">Prima di ogni salvataggio${store.condiviso ? ' fatto da questo dispositivo' : ''} viene conservata una copia dello stato precedente. Utile per tornare indietro dopo un errore.</p><ul class="pulita">${snaps.map((s, i) => `<li>${fmtData(s.ts)} · prima di: <b>${esc(s.etichetta || '-')}</b> <button class="piccolo" data-snap="${i}" style="float:right">Ripristina</button></li>`).join('')}</ul></details>` : ''}</div>` : ''}
+    ${T() && stato.ordini.length ? `<div class="card"><h2>Ordini confermati (${stato.ordini.length})</h2><p class="muted piccolo-testo">Da qui puoi riscaricare Excel o PDF di ogni ordine.</p><div class="tabella-wrap"><table><thead><tr><th>Quando</th><th>Fornitore</th><th>Consegna</th><th class="num">Voci</th><th class="num">Totale</th><th>Stato</th><th></th></tr></thead><tbody>${stato.ordini.slice().reverse().map(o => `<tr><td>${fmtData(o.ts)}</td><td>${esc(nomeFornitore(o.fornitore) || '–')}</td><td>${esc(o.negozio || '–')}</td><td class="num">${o.righe.length}</td><td class="num">${fmtMl(o.totMl)}</td><td>${badgeOrdine(o)}</td><td class="azioni" style="margin:0"><button class="piccolo" data-ordine="${o.id}">Vedi</button><button class="piccolo" data-ordine-excel="${o.id}">Excel</button><button class="piccolo" data-ordine-stampa="${o.id}">PDF</button></td></tr>`).join('')}</tbody></table></div></div>` : ''}
     <div class="card"><h2>Caricamenti (${lotti.length})</h2><p class="muted">Un caricamento sbagliato si annulla in blocco: tutte le sue righe smettono di contare e il file può essere ricaricato.</p>
-      ${lotti.length ? `<div class="tabella-wrap"><table><thead><tr><th>Quando</th><th>Tipo</th><th>File</th><th>Negozio</th><th class="num">Righe</th><th></th></tr></thead><tbody>${lotti.map(l => `<tr><td>${fmtData(l.ts)}</td><td>${l.tipo}</td><td>${esc(l.file)}</td><td>${l.negozio || 'entrambi'}</td><td class="num">${l.righe}</td><td>${l.annullato ? '<span class="badge grigio">annullato</span>' : `<button class="piccolo pericolo" data-annulla-lotto="${l.id}">Annulla</button>`}</td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">Nessuno.</p>'}</div>
+      ${lotti.length ? `<div class="tabella-wrap"><table><thead><tr><th>Quando</th><th>Tipo</th><th>File</th><th>Negozio</th><th class="num">Righe</th><th></th></tr></thead><tbody>${lotti.map(l => `<tr><td>${fmtData(l.ts)}</td><td>${l.tipo}</td><td>${esc(l.file)}</td><td>${l.negozio || 'entrambi'}</td><td class="num">${l.righe}</td><td>${l.annullato ? '<span class="badge grigio">annullato</span>' : T() ? `<button class="piccolo pericolo" data-annulla-lotto="${l.id}">Annulla</button>` : ''}</td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">Nessuno.</p>'}</div>
     <div class="card"><div class="cerca"><h2 style="margin:0;flex:1 1 auto">Movimenti (${mv.length})</h2><input type="search" id="cerca-sto" placeholder="Filtra per codice, negozio, tipo…" value="${esc(filtro.testoSto || '')}"></div>
       <div class="tabella-wrap"><table><thead><tr><th>Registrato</th><th>Data evento</th><th>Negozio</th><th>Referenza</th><th>Tipo</th><th class="num">ml</th><th>Rif.</th></tr></thead><tbody>${vis.map(m => `<tr><td>${fmtData(m.ts)}</td><td>${fmtData(m.dataEvento)}</td><td>${m.negozio}</td><td>${esc(nomeF(m.codice))}</td><td>${tipoIt[m.tipo] || m.tipo}</td><td class="num">${m.ml > 0 ? '+' : ''}${m.ml}</td><td class="muted piccolo-testo">${esc(m.note || m.rif || '')}</td></tr>`).join('') || '<tr><td colspan="7" class="vuoto">Nessun movimento.</td></tr>'}</tbody></table></div>${mv.length > 300 ? '<p class="muted piccolo-testo">Mostrati i 300 più recenti.</p>' : ''}</div>`;
-  $('#bk-esporta').onclick = () => {
-    const blob = new Blob([JSON.stringify(stato, null, 1)], { type: 'application/json' });
-    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `profumari-backup-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')}.json`; a.click();
-  };
-  $('#bk-importa').onchange = async e => {
-    const f = e.target.files[0]; if (!f) return;
-    try {
-      const s = JSON.parse(await f.text());
-      if (!s.fragranze || !s.movimenti) throw new Error('formato');
-      if (!await conferma('Ripristinare il backup?', `Il file <b>${esc(f.name)}</b> sostituirà i dati attuali (${Object.keys(s.fragranze).length} referenze, ${s.movimenti.length} movimenti). Lo stato attuale resta nei punti di ripristino automatici.`, 'Ripristina', true)) return;
-      stato = { ...statoVuoto(), ...s }; salva('ripristino backup'); toast('Backup ripristinato.'); render();
-    } catch { toast('File di backup non valido.'); }
-  };
-  $('#bk-azzera').onclick = async () => {
-    if (!await conferma('Azzerare tutti i dati?', 'Referenze, movimenti, trasferimenti e liste verranno cancellati da questo dispositivo. Lo stato attuale resta nei punti di ripristino automatici.', 'Azzera tutto', true)) return;
-    stato = statoVuoto(); salva('azzeramento'); filtro.negozio = filtro.stato = filtro.categoria = null; tab = 'magazzino'; toast('Dati azzerati.'); render();
-  };
-  $$('[data-snap]', el).forEach(b => b.onclick = async () => {
-    const s = snaps[Number(b.dataset.snap)];
-    if (!await conferma('Tornare a questo punto?', `Stato del ${fmtData(s.ts)} (prima di: ${esc(s.etichetta || '-')}). Le operazioni fatte dopo andranno perse.`, 'Ripristina', true)) return;
-    const r = store.ripristina(Number(b.dataset.snap)); if (r) { stato = r; toast('Stato ripristinato.'); render(); }
-  });
+  if (T()) {
+    $('#bk-esporta').onclick = () => {
+      const blob = new Blob([JSON.stringify(stato, null, 1)], { type: 'application/json' });
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `profumari-backup-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')}.json`; a.click();
+    };
+    $('#bk-importa').onchange = async e => {
+      const f = e.target.files[0]; if (!f) return;
+      e.target.value = '';
+      let s;
+      try { s = JSON.parse(await f.text()); if (!s.fragranze || !s.movimenti) throw new Error('formato'); }
+      catch { toast('File di backup non valido.'); return; }
+      const demo = lottiDemo(s);
+      const dove = store.condiviso ? 'per tutti i tablet' : 'su questo dispositivo';
+      const ok = await conferma('Ripristinare il backup?', `Il file <b>${esc(f.name)}</b> sostituirà i dati attuali ${dove} (${Object.keys(s.fragranze).length} referenze, ${s.movimenti.length} movimenti). Lo stato attuale resta nei punti di ripristino automatici.${demo.length ? `<label class="chk2" style="display:block;margin-top:12px"><input type="checkbox" id="bk-scarta-demo" checked> Scarta i dati dimostrativi: ${demo.length} ${demo.length === 1 ? 'caricamento' : 'caricamenti'} (${demo.map(l => esc(l.file)).join(', ')}) con ${s.movimenti.filter(m => demo.some(l => l.id === m.lotto)).length} movimenti. Gli inventari e le vendite caricati da te restano.</label>` : ''}`, 'Ripristina', true);
+      if (!ok) return;
+      if (demo.length && $('#bk-scarta-demo')?.checked) s = senzaDemo(s);
+      stato = migra({ ...statoVuoto(), ...s }); salva('ripristino backup'); toast(`Backup ripristinato${demo.length && $('#bk-scarta-demo')?.checked ? ' senza i dati dimostrativi' : ''}.`); render();
+    };
+    $('#bk-azzera').onclick = async () => {
+      if (!await conferma('Azzerare tutti i dati?', `Referenze, movimenti, trasferimenti e liste verranno cancellati ${store.condiviso ? 'per tutti i tablet' : 'da questo dispositivo'}. Lo stato attuale resta nei punti di ripristino automatici${store.condiviso ? ' di questo dispositivo' : ''}.`, 'Azzera tutto', true)) return;
+      stato = statoVuoto(); salva('azzeramento'); filtro.negozio = filtro.stato = filtro.categoria = null; tab = 'magazzino'; toast('Dati azzerati.'); render();
+    };
+    $$('[data-snap]', el).forEach(b => b.onclick = async () => {
+      const s = snaps[Number(b.dataset.snap)];
+      if (!await conferma('Tornare a questo punto?', `Stato del ${fmtData(s.ts)} (prima di: ${esc(s.etichetta || '-')}). Le operazioni fatte dopo andranno perse${store.condiviso ? ', anche quelle dell\'altro negozio' : ''}.`, 'Ripristina', true)) return;
+      const r = store.ripristina(Number(b.dataset.snap)); if (r) { stato = migra(r); toast('Stato ripristinato.'); render(); }
+    });
+  }
   $$('[data-annulla-lotto]', el).forEach(b => b.onclick = async () => {
-    const l = stato.lotti.find(x => x.id === b.dataset.annullaLotto);
+    let l = stato.lotti.find(x => x.id === b.dataset.annullaLotto);
     if (!await conferma('Annullare il caricamento?', `<b>${esc(l.file)}</b> (${l.righe} righe). Le sue righe non conteranno più e il file potrà essere ricaricato.`, 'Annulla caricamento', true)) return;
+    l = stato.lotti.find(x => x.id === b.dataset.annullaLotto); if (!l) return;
     l.annullato = true;
     for (const [k, v] of Object.entries(stato.chiaviVendite)) if (v === l.id) delete stato.chiaviVendite[k];
     salva('annulla caricamento'); toast('Caricamento annullato.'); render();
@@ -974,5 +1012,68 @@ $('#tabs').onclick = e => { const b = e.target.closest('button[data-tab]'); if (
 document.addEventListener('click', e => {
   const v = e.target.closest('[data-vai]'); if (v) { tab = v.dataset.vai; render(); }
 });
-window.profumari = { velocita, proposta, get stato() { return stato; }, set stato(s) { stato = s; salva('impostazione manuale'); render(); }, giacenze, render, normalizzaMagazzino, applicaInventario };
-render();
+window.profumari = { velocita, proposta, get stato() { return stato; }, set stato(s) { stato = s; salva('impostazione manuale'); render(); }, giacenze, render, normalizzaMagazzino, applicaInventario, get utente() { return utente; } };
+
+// ---------- accesso e sincronizzazione (versione condivisa) ----------
+let renderInAttesa = false;
+/** Vero se un ridisegno adesso farebbe perdere qualcosa all'utente (finestra aperta, campo in scrittura, anteprima o consegna in corso). */
+function occupato() {
+  const a = document.activeElement;
+  return $('#dlg').open || !!ricezione || !!anteprimaVendite || !!anteprimaGiacenze || (a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) && a.type !== 'checkbox');
+}
+/** Ridisegna per una modifica arrivata dall'altro negozio, appena l'utente non è occupato. */
+function renderDifferito() { if (occupato()) { renderInAttesa = true; return; } render(); }
+function riprendiRender() { if (renderInAttesa && !occupato()) { renderInAttesa = false; render(); } }
+$('#dlg').addEventListener('close', () => setTimeout(riprendiRender, 0));
+document.addEventListener('focusout', () => setTimeout(riprendiRender, 100));
+
+function mostraCaricamento(on, testo) {
+  $('#form-accesso').hidden = on;
+  const c = $('#accesso-caricamento'); c.hidden = !on;
+  if (testo) c.querySelector('p').textContent = testo;
+}
+function messaggioAccesso(ex) {
+  const c = ex?.code || '';
+  if (c === 'profumari/senza-ruolo') return 'Questo accesso esiste ma non ha ancora un ruolo assegnato: chiedi ad Alessio.';
+  if (/invalid-credential|wrong-password|user-not-found|invalid-email|invalid-login-credentials/.test(c)) return 'Accesso o password non corretti.';
+  if (/too-many-requests/.test(c)) return 'Troppi tentativi: aspetta qualche minuto e riprova.';
+  if (/network-request-failed/.test(c)) return 'Senza rete non si può entrare la prima volta. Riprova quando torna la connessione.';
+  if (/user-disabled/.test(c)) return 'Questo accesso è stato disattivato.';
+  return 'Accesso non riuscito: ' + (c || ex?.message || 'errore sconosciuto');
+}
+/** Mostra la schermata di accesso e risolve con il profilo dell'utente entrato. */
+function schermataAccesso() {
+  return new Promise(res => {
+    const form = $('#form-accesso'), err = $('#accesso-errore'), btn = form.querySelector('button');
+    mostraCaricamento(false);
+    form.onsubmit = async e => {
+      e.preventDefault(); err.hidden = true; btn.disabled = true;
+      try { res(await store.accedi(form.nome.value, form.password.value)); }
+      catch (ex) { console.warn('accesso', ex); err.textContent = messaggioAccesso(ex); err.hidden = false; form.password.value = ''; form.password.focus(); }
+      finally { btn.disabled = false; }
+    };
+    form.nome.focus();
+  });
+}
+async function avvio() {
+  store = await creaStore();
+  const acc = $('#accesso');
+  if (store.condiviso) {
+    acc.hidden = false; mostraCaricamento(true, 'Controllo dell\'accesso…');
+    utente = await store.utenteCorrente();
+    if (!utente) utente = await schermataAccesso();
+    mostraCaricamento(true, 'Caricamento del magazzino…');
+    try { stato = migra(await store.load()); }
+    catch (e) { console.error('load', e); mostraCaricamento(true, `Non riesco a leggere i dati (${e.code || e.message}). Controlla la connessione e ricarica la pagina.`); return; }
+    store.onChange(s => { stato = migra(s); renderDifferito(); });
+    store.onErrore(err => toast(err?.code === 'permission-denied' ? 'Operazione non consentita al tuo accesso: la modifica non è stata salvata.' : `Salvataggio non riuscito (${err?.code || err?.message || 'errore'}).`));
+    window.addEventListener('online', renderHeader); window.addEventListener('offline', renderHeader);
+    acc.hidden = true;
+  } else {
+    utente = await store.accedi();
+    stato = migra(store.load());
+  }
+  render();
+  if ('serviceWorker' in navigator && /^https?:/.test(location.protocol)) navigator.serviceWorker.register('./sw.js').catch(e => console.warn('service worker', e));
+}
+avvio().catch(e => { console.error('avvio', e); toast('Errore all\'avvio: ' + (e.code || e.message)); });
