@@ -4,14 +4,14 @@
 // Non sono segreti: la protezione dei dati sta nelle regole di Firestore (firestore.rules) e negli accessi.
 //
 // Con FIREBASE_CONFIG = null l'app lavora in modalità locale: i dati restano nel browser del dispositivo (demo).
-export const FIREBASE_CONFIG = null;
-// Esempio:
-// export const FIREBASE_CONFIG = {
-//   apiKey: 'AIza…',
-//   authDomain: 'profumari-magazzino.firebaseapp.com',
-//   projectId: 'profumari-magazzino',
-//   appId: '1:1234567890:web:abcdef',
-// };
+export const FIREBASE_CONFIG = {
+  apiKey: 'AIzaSyAlHno59-AHd5xEEJFS50nEMH2IwjCaPGU',
+  authDomain: 'profumari-magazzino.firebaseapp.com',
+  projectId: 'profumari-magazzino',
+  storageBucket: 'profumari-magazzino.firebasestorage.app',
+  messagingSenderId: '790477759152',
+  appId: '1:790477759152:web:c31b8a0fccf62b5d359175',
+};
 
 // Dominio aggiunto ai nomi di accesso senza chiocciola: "titolare" → titolare@iprofumari.it.
 // Gli accessi si creano nella console Firebase (Authentication → Users) con lo stesso indirizzo.
