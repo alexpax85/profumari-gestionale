@@ -36,6 +36,7 @@ l'app non ha dipendenze esterne e funziona anche offline.
   - `js/app.js` — schermate e regole (giacenze, import, trasferimenti, soglie, storico), schermata di accesso, permessi per ruolo
   - `sw.js` — service worker: l'app si apre anche senza rete
   - `lib/firebase/` — SDK Firebase (app, auth, firestore) incluso nella repo, così non servono CDN
+  - `lib/jspdf.umd.min.js` — generazione del PDF dell'ordine nell'app
 - `firestore.rules` — regole di accesso ai dati per ruolo (fatte rispettare dal server)
 - `firebase.json` — hosting e regole per `firebase deploy`
 - `scripts/` — utilità da riga di comando
@@ -51,7 +52,7 @@ Due accessi, uno per tipo di persona, decisi col titolare il 15/09/2026:
 | Funzione | Titolare | Dipendente |
 |---|---|---|
 | Giacenze, filtri, copertura, badge in ordine / in arrivo | sì | sì |
-| Costo €/100 ml e stima costo | sì | no (non viene nemmeno letto dal server) |
+| Costo €/litro per fornitore e stima costo | sì | no (non viene nemmeno letto dal server) |
 | Pannello "Da riordinare o spostare": Sposta | sì | sì |
 | Pannello "Da riordinare o spostare": Riordina, lista riordino, ordini, Storico ordini | sì | no |
 | Trasferimenti (proporre, spedire, ricevere, annullare) | sì | sì |
@@ -98,7 +99,8 @@ Come funziona sotto: i dati stanno in collezioni separate (`fragranze`, `riserva
   - nessuna proposta porta chi riceve oltre `ORIZZONTE_SETT` (8) settimane di copertura, così chi cede non viene svuotato;
   - sotto i 50 ml non si propone nulla e la riga dice "da riordinare" con il motivo.
 - **Fornitori**: ogni referenza ha i codici prodotto dei fornitori che la trattano (colonne PL, PF, VF… dell'inventario, o inseriti a mano in Referenze). I fornitori hanno sigla e nome esteso, gestiti nella scheda Referenze e soglie.
-- **Ordini**: nel Piano le voci di riordino si raggruppano per fornitore + negozio di consegna; per ogni gruppo si genera l'ordine in Excel (.xlsx), in PDF (stampa dall'iPad) o come testo, e lo si conferma: resta in Storico, da dove si può riscaricare.
+- **Ordini**: nel Piano le voci di riordino si raggruppano per fornitore + negozio di consegna; per ogni gruppo si genera l'ordine in PDF (file creato nell'app, condivisibile dall'iPad con Mail o WhatsApp), in Excel (.xlsx), in stampa o come testo, e lo si conferma: resta in Storico, da dove si può riscaricare. I documenti per il fornitore contengono **solo codice fornitore, quantità e note** (niente nomi, categorie o nostri codici); se manca il codice fornitore la voce è segnalata con il nostro codice e il nome.
+- **Costi**: per ogni referenza il costo è in **€/litro e per fornitore** (più un valore generico se non differenziato); serve solo alla stima nel Piano, che usa il costo del fornitore scelto sulla riga. I costi in €/100 ml delle versioni precedenti vengono convertiti automaticamente al primo caricamento.
 - **Movimenti attesi**: sotto ogni giacenza compaiono i ml già ordinati al fornitore (`+X ordine`), quelli in arrivo dall'altro negozio (`+X arrivo`, trasferimenti proposti o spediti) e quelli da spedire e ancora in giacenza (`−X uscita`, solo trasferimenti proposti: gli spediti sono già scalati). Il filtro stato ha le voci "Con trasferimenti in corso" e "Con ordini in attesa". Le proposte automatiche considerano la merce in ordine come già coperta: niente doppio riordino e la spunta di massa salta quelle voci.
 - **Consegne**: gli ordini confermati compaiono in Carichi → "Ordini in attesa di consegna". All'arrivo della merce si registra la consegna voce per voce: ricevuto come ordinato, ricevuto con quantità diversa (si corregge il numero), non arrivato (resta in attesa di una consegna successiva) o annullato. I ml ricevuti entrano come carichi nel negozio di consegna, con riferimento all'ordine. L'ordine passa a "parziale" o "ricevuto".
 - **Fuori soglia**: dalla tabella giacenze, il pulsante *Ordina o sposta* su ogni riga (e *+ Aggiungi voce* nel Piano) apre una finestra per mettere a piano un riordino o uno spostamento di qualsiasi referenza, anche non sotto scorta, con giacenze, copertura, quantità suggerita e avviso sull'effetto dello spostamento.

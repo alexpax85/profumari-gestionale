@@ -1,9 +1,9 @@
 // Service worker: tiene una copia dei file dell'app così si apre anche senza rete.
 // Strategia "prima la rete": se la rete risponde si usa (e si aggiorna la copia), altrimenti la copia salvata.
-const CACHE = 'profumari-app-v1';
+const CACHE = 'profumari-app-v2';
 const PRECARICA = ['./', './index.html', './style.css', './manifest.json', './logo.svg', './favicon.svg',
   './js/app.js', './js/store.js', './js/store-firebase.js', './js/normalizza.js', './js/config.js',
-  './fonts/assistant.css', './fonts/assistant-latin.woff2', './lib/xlsx.full.min.js',
+  './fonts/assistant.css', './fonts/assistant-latin.woff2', './lib/xlsx.full.min.js', './lib/jspdf.umd.min.js',
   './lib/firebase/firebase-app.js', './lib/firebase/firebase-auth.js', './lib/firebase/firebase-firestore.js'];
 
 self.addEventListener('install', e => {

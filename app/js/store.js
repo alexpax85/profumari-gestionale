@@ -15,7 +15,7 @@ export function statoVuoto() {
   return {
     versione: 1,
     creato: new Date().toISOString(),
-    fragranze: {},      // codice -> { codice, brand, nome, categoria, varianti[], soglia|null, fornitore, codiciFornitore, costo, attivo, note }
+    fragranze: {},      // codice -> { codice, brand, nome, categoria, varianti[], soglia|null, fornitore, codiciFornitore, costi: { sigla|'_': €/litro }, attivo, note }
     soglie,             // categoria -> scorta minima (allarme) in ml
     obiettivi,          // categoria -> scorta obiettivo (livello da ripristinare) in ml
     movimenti: [],      // { id, ts, dataEvento, negozio, codice, tipo, ml, rif, lotto, note }
@@ -105,9 +105,9 @@ export function idDoc(s) { const id = encodeURIComponent(String(s ?? '')); retur
 export function scomponi(stato) {
   const d = {}; for (const c of COLLEZIONI) d[c] = {};
   for (const [codice, f] of Object.entries(stato.fragranze || {})) {
-    const { costo, codiciFornitore, fornitore, ...pubblico } = f;
+    const { costo, costi, codiciFornitore, fornitore, ...pubblico } = f;   // `costo` (€/100 ml) è il campo vecchio: app.js lo converte in `costi`
     d.fragranze[idDoc(codice)] = { ...pubblico, codice };
-    d.riservato[idDoc(codice)] = { codice, costo: costo ?? '', codiciFornitore: codiciFornitore || {}, fornitore: fornitore || '' };
+    d.riservato[idDoc(codice)] = { codice, costi: costi || {}, codiciFornitore: codiciFornitore || {}, fornitore: fornitore || '' };
   }
   for (const fo of stato.fornitori || []) d.fornitori[idDoc(fo.sigla)] = fo;
   for (const m of stato.movimenti || []) d.movimenti[idDoc(m.id)] = m;
@@ -130,7 +130,8 @@ export function ricomponi(d) {
   for (const f of Object.values(d.fragranze || {})) s.fragranze[f.codice] = { ...f };
   for (const r of Object.values(d.riservato || {})) {
     const f = s.fragranze[r.codice]; if (!f) continue;
-    f.costo = r.costo ?? ''; f.codiciFornitore = r.codiciFornitore || {}; f.fornitore = r.fornitore || '';
+    if (r.costi) f.costi = r.costi; else if (r.costo != null && r.costo !== '') f.costo = r.costo;   // documento vecchio: lo converte app.js
+    f.codiciFornitore = r.codiciFornitore || {}; f.fornitore = r.fornitore || '';
   }
   s.fornitori = Object.values(d.fornitori || {}).sort((a, b) => String(a.sigla).localeCompare(String(b.sigla)));
   s.movimenti = Object.values(d.movimenti || {}).sort(perTs);

@@ -4,8 +4,8 @@ import assert from 'node:assert/strict';
 import { statoVuoto, scomponi, ricomponi, differenze, canonico, lottiDemo, senzaDemo, idDoc } from '../app/js/store.js';
 
 const s = statoVuoto();
-s.fragranze['545'] = { codice: '545', brand: 'Brand', nome: 'Nome', categoria: 'NICCHIA', varianti: ['PF'], soglia: null, obiettivo: null, fornitore: 'PL', codiciFornitore: { PL: '12' }, costo: '35', attivo: true, note: '' };
-s.fragranze['021'] = { codice: '021', brand: '', nome: '(da completare)', categoria: 'UOMO', varianti: [], soglia: null, fornitore: '', codiciFornitore: {}, costo: '', attivo: true, note: '' };
+s.fragranze['545'] = { codice: '545', brand: 'Brand', nome: 'Nome', categoria: 'NICCHIA', varianti: ['PF'], soglia: null, obiettivo: null, fornitore: 'PL', codiciFornitore: { PL: '12' }, costi: { PL: 350 }, attivo: true, note: '' };
+s.fragranze['021'] = { codice: '021', brand: '', nome: '(da completare)', categoria: 'UOMO', varianti: [], soglia: null, fornitore: '', codiciFornitore: {}, costi: {}, attivo: true, note: '' };
 s.fornitori.push({ sigla: 'PL', nome: 'Parfum Lab' }, { sigla: 'A/B', nome: 'Con barra' });
 s.lotti.push({ id: 'l1', ts: '2026-09-01T10:00:00.000Z', tipo: 'vendite', file: 'vendite.csv', righe: 2, scartate: [], annullato: false });
 s.lotti.push({ id: 'l2', ts: '2026-09-02T10:00:00.000Z', tipo: 'giacenze', file: 'Inventario Aprilia (demo)', negozio: 'Aprilia', righe: 1, scartate: [], annullato: false });
@@ -23,8 +23,11 @@ s.soglie.UOMO = 150;
 // scomponi → ricomponi è l'identità sullo stato (a meno dell'ordine dei movimenti, che viene per data)
 const d = scomponi(s);
 assert.equal(Object.keys(d.fragranze).length, 2);
-assert.ok(!('costo' in d.fragranze['545']) && !('codiciFornitore' in d.fragranze['545']), 'costi e codici fornitore non stanno nel documento pubblico');
-assert.deepEqual(d.riservato['545'], { codice: '545', costo: '35', codiciFornitore: { PL: '12' }, fornitore: 'PL' });
+assert.ok(!('costi' in d.fragranze['545']) && !('codiciFornitore' in d.fragranze['545']), 'costi e codici fornitore non stanno nel documento pubblico');
+assert.deepEqual(d.riservato['545'], { codice: '545', costi: { PL: 350 }, codiciFornitore: { PL: '12' }, fornitore: 'PL' });
+// documento riservato vecchio (costo unico €/100 ml): resta come `costo`, lo converte app.js
+const vecchio = ricomponi({ fragranze: { '001': { codice: '001', nome: 'X' } }, riservato: { '001': { codice: '001', costo: '35', codiciFornitore: {}, fornitore: '' } } });
+assert.equal(vecchio.fragranze['001'].costo, '35'); assert.ok(!('costi' in vecchio.fragranze['001']));
 assert.ok('A%2FB' in d.fornitori, 'id documento senza barra: ' + Object.keys(d.fornitori));
 assert.deepEqual(d.lotti.l1.chiavi, ['k1', 'k2']);
 assert.deepEqual(d.config.piano_riordini.voci, s.piano.riordini);
