@@ -299,11 +299,30 @@ function testoOrdine(o) {
 async function copiaTesto(testo) { try { await navigator.clipboard.writeText(testo); toast('Copiato negli appunti.'); } catch { toast('Copia non riuscita: usa Excel o Stampa.'); } }
 function dialogOrdine(o) {
   const d = $('#dlg');
+  const intatto = !o.righe.some(r => r.ricevutoMl != null);   // nessuna consegna registrata: si può ancora eliminare o rifare
   d.innerHTML = `<h2>Ordine ${esc(nomeFornitore(o.fornitore))} · ${esc(o.negozio)}</h2><p class="muted">${fmtData(o.ts)} · ${o.righe.length} voci · ${fmtMl(o.righe.reduce((a, r) => a + r.ml, 0))} · ${badgeOrdine(o)}</p>
     <div class="tabella-wrap"><table><thead><tr><th>Cod. ${esc(o.fornitore || 'forn.')}</th><th>Codice</th><th>Prodotto</th><th class="num">Ordinati</th><th>Consegna</th><th>Nota</th></tr></thead><tbody>${o.righe.map(r => `<tr><td class="cod">${esc(r.codiceFornitore)}</td><td>${r.codice}</td><td>${esc(r.nome)}</td><td class="num"><b>${r.ml}</b></td><td>${r.annullata ? '<span class="badge grigio">annullata</span>' : r.ricevutoMl != null ? `<span class="badge ${r.ricevutoMl === r.ml ? 'ok' : 'sotto'}">ricevuti ${r.ricevutoMl}</span>` : '<span class="badge neutro">in attesa</span>'}</td><td>${esc(r.note)}</td></tr>`).join('')}</tbody></table></div>
     <p class="muted piccolo-testo">PDF, Excel e testo contengono solo codice fornitore, quantità e note.</p>
-    <div class="azioni"><button id="ord-pdf" class="primario">PDF</button><button id="ord-excel">Excel</button><button id="ord-stampa">Stampa</button><button id="ord-copia">Copia testo</button><button id="ord-chiudi">Chiudi</button></div>`;
+    <div class="azioni"><button id="ord-pdf" class="primario">PDF</button><button id="ord-excel">Excel</button><button id="ord-stampa">Stampa</button><button id="ord-copia">Copia testo</button><button id="ord-chiudi">Chiudi</button></div>
+    ${T() ? (intatto
+      ? `<div class="azioni" style="border-top:1px solid var(--line);padding-top:12px"><button id="ord-piano">Riporta nel piano</button><button id="ord-elimina" class="pericolo">Elimina ordine</button><span class="muted piccolo-testo" style="flex:1 1 200px">Finché non è arrivato nulla, l'ordine si può eliminare (una prova, un errore) o rimettere nel piano per correggerlo e confermarlo di nuovo.</span></div>`
+      : `<p class="muted piccolo-testo">Qualche voce è già stata ricevuta: le voci ancora in attesa si annullano da <b>Carichi → Registra consegna → "Non arriverà, annulla"</b>.</p>`) : ''}`;
   $('#ord-chiudi').onclick = () => d.close();
+  if (T() && intatto) {
+    $('#ord-elimina').onclick = async () => {
+      d.close();
+      if (!await conferma('Eliminare l\'ordine?', `<b>${esc(nomeFornitore(o.fornitore))}</b>, consegna a <b>${esc(o.negozio)}</b>, ${o.righe.length} voci. Sparisce da Storico e dai "in ordine" delle giacenze. Se l'hai già inviato al fornitore, avvisalo tu.`, 'Elimina', true)) return;
+      stato.ordini = stato.ordini.filter(x => x.id !== o.id);
+      salva('elimina ordine'); toast('Ordine eliminato.'); render();
+    };
+    $('#ord-piano').onclick = async () => {
+      d.close();
+      if (!await conferma('Riportare le voci nel piano?', `L'ordine viene eliminato e le sue ${o.righe.length} voci tornano nella <b>lista riordino</b> del Piano, dove puoi cambiare quantità, fornitore e note e confermare di nuovo.`, 'Riporta nel piano')) return;
+      for (const r of o.righe) if (!r.annullata) stato.piano.riordini[chiavePiano(r.codice, o.negozio)] = { codice: r.codice, negozio: o.negozio, ml: r.ml, fornitore: o.fornitore || '', note: r.note || '' };
+      stato.ordini = stato.ordini.filter(x => x.id !== o.id);
+      salva('ordine riportato nel piano'); toast('Voci riportate nel piano.'); tab = 'piano'; render(); window.scrollTo(0, 0);
+    };
+  }
   $('#ord-pdf').onclick = () => pdfOrdine(o);
   $('#ord-excel').onclick = () => excelOrdine(o);
   $('#ord-stampa').onclick = () => { d.close(); stampaOrdine(o); };
