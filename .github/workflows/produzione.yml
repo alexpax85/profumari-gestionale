@@ -20,6 +20,10 @@ jobs:
       - name: Controlli veloci
         run: node scripts/test_store.mjs
       - name: Regole Firestore
+        # Non blocca la pubblicazione dell'app: se fallisce per permessi, le regole si incollano
+        # a mano nella console (Firestore → Regole) e all'account di servizio va aggiunto il ruolo
+        # "Firebase Rules Admin" (o "Editor") in Google Cloud IAM.
+        continue-on-error: true
         run: |
           printf '%s' "$SERVICE_ACCOUNT" > "$RUNNER_TEMP/sa.json"
           npx --yes firebase-tools@latest deploy --only firestore:rules --project "${{ vars.FIREBASE_PROJECT_ID }}" --non-interactive
